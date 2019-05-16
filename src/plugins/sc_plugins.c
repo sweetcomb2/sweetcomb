@@ -18,6 +18,8 @@
 #include "sc_plugins.h"
 
 #include <dirent.h>
+#include <string.h>
+#include <errno.h>
 
 #include <vom/hw.hpp>
 #include <vom/om.hpp>
@@ -28,50 +30,87 @@ sc_plugin_main_t sc_plugin_main;
 
 using namespace VOM;
 
+#define _DIRENT_NAME 256
+#define CMDLINE_MAX _DIRENT_NAME + 15
+#define VPP_FULL_PATH "/usr/bin/vpp"
+
 sc_plugin_main_t *sc_get_plugin_main()
 {
     return &sc_plugin_main;
 }
 
-/* get vpp pid in system */
+/**
+ * @brief get one pid of any running vpp process.
+ * @return Return vpp pid or -ESRH value if process was not found
+ */
 int get_vpp_pid()
 {
-    DIR *dir;
-    struct dirent *ptr;
-    FILE *fp;
-    char filepath[50];
-    char filetext[20];
+    DIR *dir = NULL;
+    struct dirent *ptr = NULL;
+    FILE *fp = NULL;
+    char filepath[CMDLINE_MAX];
+    char filetext[strlen(VPP_FULL_PATH)];
+    char *first = NULL;
+    size_t cnt;
+    int rc;
 
     dir = opendir("/proc");
-    int vpp_pid = 0;
+    if (dir == NULL)
+        return -errno;
+
     /* read vpp pid file in proc, return pid of vpp */
-    if (NULL != dir)
+    while (NULL != (ptr = readdir(dir)))
     {
-        while (NULL != (ptr =readdir(dir)))
-        {
-            if ((0 == strcmp(ptr->d_name, ".")) || (0 == strcmp(ptr->d_name, "..")))
-                continue;
+        if ((0 == strcmp(ptr->d_name, ".")) || (0 == strcmp(ptr->d_name, "..")))
+            continue;
 
-            if (DT_DIR != ptr->d_type)
-                continue;
+        if (DT_DIR != ptr->d_type)
+            continue;
 
-            sprintf(filepath, "/proc/%s/cmdline",ptr->d_name);
-            fp = fopen(filepath, "r");
+        /* Open cmdline of PID */
+        snprintf(filepath, CMDLINE_MAX, "/proc/%s/cmdline", ptr->d_name);
+        fp = fopen(filepath, "r");
+        if (fp == NULL)
+            continue;
 
-            if (NULL != fp)
-            {
-                fread(filetext, 1, 13, fp);
-                filetext[12] = '\0';
+        /* Write '/0' char in filetext array to prevent stack reading */
+        bzero(filetext, strlen(VPP_FULL_PATH));
 
-                if (filetext == strstr(filetext, "/usr/bin/vpp"))
-                    vpp_pid = atoi(ptr->d_name);
-
-                fclose(fp);
-            }
+        /* Read the string written in cmdline file */
+        cnt = fread(filetext, sizeof(char), sizeof(VPP_FULL_PATH), fp);
+        if (cnt == 0) {
+            fclose(fp);
+            continue;
         }
-        closedir(dir);
+        filetext[cnt] = '\0';
+
+        /* retrieve string before first space */
+        first = strtok(filetext, " ");
+        if (first == NULL) { //unmet space delimiter
+            fclose(fp);
+            continue;
+        }
+
+        /* One VPP process has been found */
+        if (!strcmp(first, "vpp") || !strcmp(first, VPP_FULL_PATH)) {
+            fclose(fp);
+            closedir(dir);
+            return atoi(ptr->d_name);
+        }
+
+        fclose(fp); // we assume fclose don't fail
+
+        errno = 0; //to distinguish readdir() error from end of dir
     }
-    return vpp_pid;
+
+    if (errno != 0) { //this means an error has occured in readir
+        SRP_LOG_ERR("readir errno %d", errno);
+        return -errno;
+    }
+
+    closedir(dir);
+
+    return -ESRCH;
 }
 
 
@@ -98,6 +137,8 @@ int sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     /* Get initial PID of VPP process */
     vpp_pid_start = get_vpp_pid();
+    if (vpp_pid_start < 0)
+        return SR_ERR_DISCONNECT;
 
     return SR_ERR_OK;
 }
@@ -122,6 +163,8 @@ int sr_plugin_health_check_cb(sr_session_ctx_t *session, void *private_ctx)
     if (vpp_pid_now == vpp_pid_start)
         return SR_ERR_OK; //VPP has not crashed
 
+    SRP_LOG_WRN("VPP has crashed, new pid %d", vpp_pid_now);
+
     /* Wait until we succeed connecting to VPP */
     HW::disconnect();
     while (HW::connect() != true) {
@@ -134,6 +177,8 @@ int sr_plugin_health_check_cb(sr_session_ctx_t *session, void *private_ctx)
      * This function replays the previous configuration to reconfigure VPP
      * so that VPP state matches sysrepo RUNNING DS and VOM database. */
     OM::replay();
+
+    vpp_pid_start = vpp_pid_now;
 
     return SR_ERR_OK;
 }
