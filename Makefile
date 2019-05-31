@@ -68,6 +68,9 @@ DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SCVPP_DEB} ${SYS
 #Dependencies for grpc
 DEB_GNMI_DEPENDS = libpugixml-dev libjsoncpp-dev libtool pkg-config
 
+#Dependencies for automatic test
+DEB_TEST_DEPENDS = python3-pip python-pip libcurl4-openssl-dev libpcre3-dev libssh-dev libxml2-dev libxslt1-dev libtool-bin
+
 #####
 #RPM#
 #####
@@ -100,6 +103,7 @@ help:
 	@echo " install-models         - install YANG models"
 	@echo " uninstall-models       - uninstall YANG models"
 	@echo " install-dep-gnmi-extra - install software extra dependencips from source code for gNMI"
+	@echo " install-test-extra     - install software extra dependencies from source code for YDK"
 	@echo " build-scvpp            - build scvpp"
 	@echo " test-scvpp             - unit test for scvpp"
 	@echo " build-plugins          - build plugins"
@@ -195,6 +199,29 @@ _netopeer2:
 	&&make -j$(nproc) && make install && sudo ldconfig\
 	&&cd ../../../ && mv v0.7-r1.tar.gz Netopeer2-0.7-r1.tar.gz\
 
+_test_python_dep:
+ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
+	@sudo -E apt-get $(APT_ARGS) -y --force-yes install $(DEB_TEST_DEPENDS)\
+	&&pip3 install pexpect pyroute2 psutil
+else ifeq ($(OS_ID),centos)
+	#TODO: Install centos dependencies
+# 	@sudo -E yum install -y $(RPM_GNMI_DEPENDS)
+else
+	$(error "This option currently works only on Ubuntu, Debian, Centos or openSUSE systems")
+endif
+
+_ydk:
+	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
+	&&wget https://github.com/CiscoDevNet/ydk-gen/archive/0.8.3.tar.gz\
+	&&tar xvf 0.8.3.tar.gz && cd ydk-gen-0.8.3 && pip install -r requirements.txt\
+	&&./generate.py --libydk -i && ./generate.py --python --core\
+	&&pip3 install gen-api/python/ydk/dist/ydk*.tar.gz\
+	&&./generate.py --python --bundle profiles/bundles/ietf_0_1_5.json\
+	&&./generate.py --python --bundle profiles/bundles/openconfig_0_1_5.json\
+	&&pip3 install gen-api/python/ietf-bundle/dist/ydk*.tar.gz\
+	&&pip3 install gen-api/python/openconfig-bundle/dist/ydk*.tar.gz\
+	&&cd ../\
+
 _clean_dl:
 	@rm -rf $(BR)/downloads
 
@@ -232,6 +259,9 @@ ifeq ($(OS_ID),centos)
 	@sudo yum -y install vpp vpp-lib vpp-plugin* vpp-devel
 endif
 endif
+
+install-test-extra: _test_python_dep _ydk
+	@cd ../ && rm -rf $(BR)/downloads
 
 build-scvpp:
 	@mkdir -p $(BR)/build-scvpp/; cd $(BR)/build-scvpp; \
