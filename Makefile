@@ -203,6 +203,11 @@ _test_python_dep:
 ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
 	@sudo -E apt-get $(APT_ARGS) -y --force-yes install $(DEB_TEST_DEPENDS)\
 	&&pip3 install pexpect pyroute2 psutil
+ifeq ($(OS_VERSION_ID), 16.04)
+	# Need update libssh library, because with old library don't work ssh comunication with netopeer
+	@echo "deb http://archive.ubuntu.com/ubuntu/ bionic main restricted" >> /etc/apt/sources.list\
+	&&apt-get update && apt-get -y install libssh-4
+endif
 else ifeq ($(OS_ID),centos)
 	#TODO: Install centos dependencies
 # 	@sudo -E yum install -y $(RPM_GNMI_DEPENDS)
@@ -278,7 +283,7 @@ build-plugins:
 	make install
 	@# NEW INSTRUCTIONS TO BUILD-PLUGINS MUST BE DECLARED ON A NEW LINE WITH '@'
 
-test-plugins:
+test-plugins: install-models
 	@test/run_test.py --dir ./test/
 
 build-gnmi:
