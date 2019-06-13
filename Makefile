@@ -56,14 +56,12 @@ BUILD_DEB = curl build-essential autoconf automake ccache git cmake wget coreuti
 NETOPEER2_DEB = libssl-dev pkgconf
 #Dependencies for checkstyle
 CHECKSTYLE_DEB = indent
-#Dependencies for scvpp
-SCVPP_DEB = libcmocka-dev
 #Dependencies for sysrepo (swig required for sysrepo python, lua, java)
 SYSREPO_DEB = libev-dev libavl-dev bison flex libpcre3-dev libprotobuf-c-dev protobuf-c-compiler
 #Dependencies of libssh
 LIBSSH_DEB = zlib1g-dev
 #Sum dependencies
-DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SCVPP_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB}
+DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB}
 
 #Dependencies for grpc
 DEB_GNMI_DEPENDS = libpugixml-dev libjsoncpp-dev libtool pkg-config
@@ -80,19 +78,16 @@ BUILD_RPM = curl autoconf automake ccache cmake3 wget gcc gcc-c++ git
 NETOPEER2_RPM = openssl-devel
 #Dependencies for checkstyle
 CHECKSTYLE_RPM = indent
-#Dependencies for scvpp
-SCVPP_RPM = libcmocka-devel
 #Dependencies for sysrepo
 SYSREPO_RPM = libev-devel bison flex pcre-devel protobuf-c-devel protobuf-c-compiler
 
-RPM_DEPENDS = ${BUILD_RPM} ${NETOPEER2_RPM} ${CHECKSTYLE_RPM} ${SCVPP_RPM} \
-	      ${SYSREPO_RPM}
+RPM_DEPENDS = ${BUILD_RPM} ${NETOPEER2_RPM} ${CHECKSTYLE_RPM} ${SYSREPO_RPM}
 
 #Dependencies for grpc
 RPM_GNMI_DEPENDS = pugixml jsoncpp libtool pugixml-devel jsoncpp-devel ${GRPC_RPM}
 
 .PHONY: help install-dep install-dep-extra install-vpp install-models uninstall-models \
-    install-dep-gnmi-extra build-scvpp build-plugins build-gnmi build-package docker \
+    install-dep-gnmi-extra build-plugins build-gnmi build-package docker \
     docker-test test clean distclean _clean_dl _libssh _libyang _libnetconf2 _sysrepo _netopeer2
 
 help:
@@ -104,8 +99,6 @@ help:
 	@echo " uninstall-models       - uninstall YANG models"
 	@echo " install-dep-gnmi-extra - install software extra dependencips from source code for gNMI"
 	@echo " install-test-extra     - install software extra dependencies from source code for YDK"
-	@echo " build-scvpp            - build scvpp"
-	@echo " test-scvpp             - unit test for scvpp"
 	@echo " build-plugins          - build plugins"
 	@echo " test-plugins           - integration test for sweetcomb plugins"
 	@echo " build-gnmi             - build gNMIServer"
@@ -268,15 +261,6 @@ endif
 install-test-extra: _test_python_dep _ydk
 	@cd ../ && rm -rf $(BR)/downloads
 
-build-scvpp:
-	@mkdir -p $(BR)/build-scvpp/; cd $(BR)/build-scvpp; \
-	cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX:PATH=/usr $(WS_ROOT)/src/scvpp/;\
-	make install
-	@# NEW INSTRUCTIONS TO BUILD-SCVPP MUST BE DECLARED ON A NEW LINE WITH '@'
-
-test-scvpp: build-scvpp
-	@cd $(BR)/build-scvpp; make test
-
 build-plugins:
 	@mkdir -p $(BR)/build-plugins/; cd $(BR)/build-plugins/; \
 	cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX:PATH=/usr $(WS_ROOT)/src/plugins/; \
@@ -302,17 +286,22 @@ build-package:
 	@rm -rf $(BR)/build-package/_CPack_Packages;
 
 install-models:
+	@cd src/plugins/yang/opendaylight; \
+	sysrepoctl --install --yang=yang-ext@2013-07-09.yang > /dev/null;
 	@cd src/plugins/yang/ietf; \
 	sysrepoctl --install --yang=iana-if-type@2017-01-19.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-interfaces@2018-02-20.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-ip@2014-06-16.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-nat@2017-11-16.yang > /dev/null; \
 	sysrepoctl -e if-mib -m ietf-interfaces;
+	@cd src/plugins/yang/hc2vpp; \
+	sysrepoctl -S --install --yang=interface-nat@2017-08-16.yang > /dev/null;
 	@cd src/plugins/yang/openconfig; \
 	sysrepoctl -S --install --yang=openconfig-local-routing@2017-05-15.yang > /dev/null; \
 	sysrepoctl -S --install --yang=openconfig-interfaces@2018-08-07.yang > /dev/null; \
 	sysrepoctl -S --install --yang=openconfig-if-ip@2018-01-05.yang > /dev/null; \
-	sysrepoctl -S --install --yang=openconfig-acl@2018-11-21.yang > /dev/null;
+	sysrepoctl -S --install --yang=openconfig-acl@2018-11-21.yang > /dev/null; \
+	sysrepoctl -S --install --yang=openconfig-vlan-types@2018-02-14.yang > /dev/null;
 
 uninstall-models:
 	@ sysrepoctl -u -m ietf-ip > /dev/null; \
@@ -321,19 +310,19 @@ uninstall-models:
 	sysrepoctl -u -m openconfig-local-routing > /dev/null; \
 	sysrepoctl -u -m openconfig-if-aggregate > /dev/null; \
 	sysrepoctl -u -m openconfig-interfaces > /dev/null; \
+	sysrepoctl -u -m interface-nat > /dev/null; \
 	sysrepoctl -u -m ietf-nat > /dev/null; \
 	sysrepoctl -u -m iana-if-type > /dev/null; \
 	sysrepoctl -u -m ietf-interfaces > /dev/null; \
+	sysrepoctl -u -m yang-ext > /dev/null; \
 	sysrepoctl -u -m openconfig-vlan-types > /dev/null;
 
 clean:
-	@if [ -d $(BR)/build-scvpp ] ;   then cd $(BR)/build-scvpp   && make clean; fi
 	@if [ -d $(BR)/build-plugins ] ; then cd $(BR)/build-plugins && make clean; fi
 	@if [ -d $(BR)/build-package ] ; then cd $(BR)/build-package && make clean; fi
 	@if [ -d $(BR)/build-gnmi ] ;    then cd $(BR)/build-gnmi    && make clean; fi
 
 distclean:
-	@rm -rf $(BR)/build-scvpp
 	@rm -rf $(BR)/build-plugins
 	@rm -rf $(BR)/build-package
 	@rm -rf $(BR)/build-gnmi

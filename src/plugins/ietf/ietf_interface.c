@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Copyright (c) 2019 Cisco and/or its affiliates.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -14,13 +15,14 @@
  */
 
 #include <stdio.h>
+#include <iomanip>
 #include <sys/socket.h>
 
-#include <vom/interface.hpp>
 #include <vom/om.hpp>
+#include <vom/interface.hpp>
+#include <vom/interface_cmds.hpp>
 #include <vom/l3_binding.hpp>
 #include <vom/l3_binding_cmds.hpp>
-#include <vom/route.hpp>
 
 #include <string>
 #include <exception>
@@ -29,6 +31,7 @@
 
 #include "sc_plugins.h"
 
+using namespace std;
 using namespace VOM;
 
 #define MODULE_NAME "ietf-interfaces"
@@ -72,7 +75,7 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
         SRP_LOG_DBG("A change detected in '%s', op=%d", new_val ? new_val->xpath : old_val->xpath, op);
         if_name = sr_xpath_key_value(new_val ? new_val->xpath : old_val->xpath, "interface", "name", &xpath_ctx);
 
-        std::shared_ptr<interface> intf;
+        shared_ptr<interface> intf;
         intf = interface::find(if_name);
         if (nullptr == intf) {
             SRP_LOG_ERR_MSG("Interface does not exist");
@@ -104,6 +107,8 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
         vom_rc = OM::write(MODULE_NAME, *intf);
         if (rc_t::OK != vom_rc) {
             SRP_LOG_ERR_MSG("Error write data to vpp");
+        } else {
+            SRP_LOG_DBG_MSG("Data written to vpp");
         }
     }
     sr_free_change_iter(iter);
@@ -112,14 +117,14 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
 }
 
 static int
-ipv46_config_add_remove(const std::string &if_name,
-                        const std::string &addr, uint8_t prefix,
+ipv46_config_add_remove(const string &if_name,
+                        const string &addr, uint8_t prefix,
                         bool add)
 {
     l3_binding *l3;
     rc_t rc = rc_t::OK;
 
-    std::shared_ptr<interface> intf = interface::find(if_name);
+    shared_ptr<interface> intf = interface::find(if_name);
     if (nullptr == intf) {
         SRP_LOG_ERR_MSG("Interfaces does not exist");
         return SR_ERR_INVAL_ARG;
@@ -145,16 +150,17 @@ ipv46_config_add_remove(const std::string &if_name,
         SRP_LOG_ERR_MSG("Error write data to vpp");
         return SR_ERR_OPERATION_FAILED;
     }
+    SRP_LOG_DBG_MSG("Data written to vpp");
 
     return SR_ERR_OK;
 }
 
 static void
-parse_interface_ipv46_address(sr_val_t *val, std::string &addr,
+parse_interface_ipv46_address(sr_val_t *val, string &addr,
                               uint8_t &prefix)
 {
     if (nullptr == val) {
-        throw std::runtime_error("Null pointer");
+        throw runtime_error("Null pointer");
     }
 
     if (SR_LIST_T == val->type) {
@@ -188,8 +194,8 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
     sr_val_t *old_val = nullptr;
     sr_val_t *new_val = nullptr;
     sr_xpath_ctx_t xpath_ctx = { 0, };
-    std::string new_addr, old_addr;
-    std::string if_name;
+    string new_addr, old_addr;
+    string if_name;
     uint8_t new_prefix = 0;
     uint8_t old_prefix = 0;
     int rc = SR_ERR_OK, op_rc = SR_ERR_OK;
@@ -298,6 +304,9 @@ ietf_interface_change_cb(sr_session_ctx_t *session, const char *xpath,
     return SR_ERR_OK;
 }
 
+#define NUM_VALS_STATE_INTERFACE    5
+#define NUM_VALS_STATE_INTERFACE_IP 1
+
 /**
  * @brief Callback to be called by any request for state data under "/ietf-interfaces:interfaces-state/interface" path.
  */
@@ -308,81 +317,116 @@ ietf_interface_state_cb(const char *xpath, sr_val_t **values,
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
     struct elt* stack;
-    sr_val_t *val = nullptr;
-    int vc = 5; //number of answer per interfaces
-    int cnt = 0; //value counter
-    int interface_num = 0;
-    std::ostringstream os;
-    int rc = SR_ERR_OK;
+    sr_val_t *vals = nullptr;
+    sr_xpath_ctx_t state = {0};
+    int vals_cnt = 0;
+    int cnt = 0;
 
-    SRP_LOG_INF("In %s", __FUNCTION__);
+    *values = nullptr;
+    *values_cnt = 0;
 
-    if (!sr_xpath_node_name_eq(xpath, "interface"))
-        goto nothing_todo; //no interface field specified
+    // if (!sr_xpath_node_name_eq(xpath, "interfaces-state"))
+    //     return SR_ERR_INVAL_ARG;
 
-    //TODO: Not effective
-    for (auto inter = interface::cbegin(); inter != interface::cend(); inter++) {
-        interface_num++;
+    SRP_LOG_INF("In %s, %s", __FUNCTION__, xpath);
+
+    // Retrieve ip addresses using l3_binding dump
+    shared_ptr<interface_cmds::dump_cmd> cmd =
+        make_shared<interface_cmds::dump_cmd>();
+    HW::enqueue(cmd);
+    HW::write();
+
+        //TODO: Not effective
+    for (auto &it : *cmd) {
+        vals_cnt += NUM_VALS_STATE_INTERFACE;
+
+        vapi_payload_sw_interface_details payload = it.get_payload();
+        shared_ptr<interface> itf = interface::find((char*)payload.interface_name);
+        if (nullptr != itf) {
+            shared_ptr<l3_binding_cmds::dump_v4_cmd> dipv4 =
+            make_shared<l3_binding_cmds::dump_v4_cmd>(
+                l3_binding_cmds::dump_v4_cmd(itf->handle()));
+            HW::enqueue(dipv4);
+            // shared_ptr<l3_binding_cmds::dump_v6_cmd> dipv6 =
+            // make_shared<l3_binding_cmds::dump_v6_cmd>(
+            //     l3_binding_cmds::dump_v6_cmd(itf->handle()));
+            // HW::enqueue(dipv6);
+            HW::write();
+
+            for (auto& l3_record : *dipv4)
+                vals_cnt += NUM_VALS_STATE_INTERFACE_IP;
+            // for (auto& l3_record : *dipv6)
+            //     vals_cnt += NUM_VALS_STATE_INTERFACE_IP;
+        }
     }
 
     /* allocate array of values to be returned */
-    SRP_LOG_DBG("number of interfaces: %d",  interface_num + 1);
-    rc = sr_new_values((interface_num + 1)* vc, &val);
-    if (0 != rc)
-        goto nothing_todo;
+    if (0 != sr_new_values(vals_cnt, &vals))
+        return SR_ERR_OPERATION_FAILED;
 
-    for (auto inter = interface::cbegin(); inter != interface::cend(); inter++) {
-        std::shared_ptr<interface> interface = inter->second.lock();
-        const char *if_name = interface->name().c_str();
-
-        SRP_LOG_DBG("State of interface %s", if_name);
+    for (auto &it : *cmd) {
+        vapi_payload_sw_interface_details payload = it.get_payload();
         //TODO need support for type propvirtual
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/type", xpath,
-                           interface->name().c_str());
-        sr_val_set_str_data(&val[cnt], SR_IDENTITYREF_T, "iana-if-type:ethernetCsmacd");
-        cnt++;
+        sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/type", xpath,
+                            payload.interface_name);
+        sr_val_set_str_data(&vals[cnt++], SR_IDENTITYREF_T,
+                            "iana-if-type:ethernetCsmacd");
+        sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/admin-status", xpath,
+                            payload.interface_name);
+        sr_val_set_str_data(&vals[cnt++], SR_ENUM_T,
+                            payload.admin_up_down?"up":"down");
+        sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/oper-status", xpath,
+                            payload.interface_name);
+        sr_val_set_str_data(&vals[cnt++], SR_ENUM_T,
+                            payload.link_up_down?"up":"down");
+        sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/speed", xpath,
+                            payload.interface_name);
+        vals[cnt].type = SR_UINT64_T;
+        vals[cnt++].data.uint64_val = payload.link_mtu;
+        if (payload.l2_address_length > 0) {
+            stringstream l2_address;
+            l2_address << setfill('0') << setw(2) << hex << static_cast<int>(payload.l2_address[0]);
+            for (auto i=1;i<payload.l2_address_length;i++)
+                l2_address << ":" << setfill('0') << setw(2) << hex << static_cast<int>(payload.l2_address[i]);
+            sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/phys-address", xpath,
+                                payload.interface_name);
+            sr_val_build_str_data(&vals[cnt++], SR_STRING_T, "%s",
+                                l2_address.str().c_str());
+        }
 
-        interface->dump(os);
+        //TODO: Not effective
+        shared_ptr<interface> itf = interface::find((char*)payload.interface_name);
+        if (nullptr != itf) {
+            shared_ptr<l3_binding_cmds::dump_v4_cmd> dipv4 =
+            make_shared<l3_binding_cmds::dump_v4_cmd>(
+                l3_binding_cmds::dump_v4_cmd(itf->handle()));
+            HW::enqueue(dipv4);
+            HW::write();
 
-        const std::string token("oper-state:");
-        std::string tmp = os.str();
-        std::string state = tmp.substr(tmp.find(token));
-        state = state.substr(token.length(), state.find("]") - token.length());
-
-        //Be careful, it needs if-mib feature to work !
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/admin-status", xpath,
-                           if_name);
-        sr_val_set_str_data(&val[cnt], SR_ENUM_T, state.c_str());
-        cnt++;
-
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/oper-status", xpath,
-                           if_name);
-        sr_val_set_str_data(&val[cnt], SR_ENUM_T, state.c_str());
-        cnt++;
-
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/phys-address", xpath,
-                           if_name);
-        auto l2_address = interface->l2_address();
-        sr_val_build_str_data(&val[cnt], SR_STRING_T, "%s",
-                              l2_address.to_string().c_str());
-        cnt++;
-
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/speed", xpath, if_name);
-        val[cnt].type = SR_UINT64_T;
-        //FIXME: VOM don't support print MTU??? Must find
-        val[cnt].data.uint64_val = 9000;
-        cnt++;
+            char ip_address[INET6_ADDRSTRLEN+1];
+            for (auto& l3_record : *dipv4) {
+                vapi_payload_ip_address_details l3_payload = l3_record.get_payload();
+                if (sc_ntop(AF_INET, l3_payload.ip, ip_address)) {
+                    sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/ietf-ip:ipv4/ietf-ip:address[ietf-ip:ip='%s']/ietf-ip:prefix-length", xpath, payload.interface_name, ip_address);
+                    vals[cnt].type = SR_UINT8_T;
+                    vals[cnt++].data.uint8_val = l3_payload.prefix_length;
+                }
+            }
+            // for (auto& l3_record : *dipv6) {
+            //     vapi_payload_ip6_address_details l3_payload = l3_record.get_payload();
+            //     if (sc_ntop(AF_INET6, l3_payload.ip, ip_address)) {
+            //         sr_val_build_xpath(&vals[cnt], "%s/interface[name='%s']/ietf-ip:ipv6/ietf-ip:address[ietf-ip:ip='%s']/ietf-ip:prefix-length", xpath, payload.interface_name, ip_address);
+            //         vals[cnt].type = SR_UINT8_T;
+            //         vals[cnt++].data.uint8_val = l3_payload.prefix_length;
+            //     }
+            // }
+        }
     }
 
-    *values = val;
+    *values = vals;
     *values_cnt = cnt;
 
     return SR_ERR_OK;
-
-nothing_todo:
-    *values = nullptr;
-    *values_cnt = 0;
-    return rc;
 }
 
 

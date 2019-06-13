@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018 PANTHEON.tech.
+ * Copyright (c) 2019 Cisco and/or its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,104 +18,79 @@
 #include <assert.h>
 #include <string.h>
 
-#include <scvpp/comm.h>
-#include <scvpp/interface.h>
-#include <scvpp/ip.h>
+#include <vom/om.hpp>
+#include <vom/interface.hpp>
+#include "vom/prefix.hpp"
+#include "vom/route.hpp"
+#include "vom/route_cmds.hpp"
 
-#include <sc_plugins.h>
+#include <string>
+#include <map>
+#include <exception>
 
-#define HOP_INDEX_SIZE 10 //number of digit in max 32 bit integer
+#include "sc_plugins.h"
 
-static inline int
-_set_route (const char *prefix, const char *nhop, bool is_add,
-            const char *iface)
-{
-    int table = 0; //FIB table ID
-    int mask;
-    int rc;
+using namespace boost;
+using namespace std;
+using namespace VOM;
 
-    // Put prefix length in mask and prefix IP in prefix
-    mask = ip_prefix_split(prefix);
-    if (mask < 1) {
-        SRP_LOG_ERR("Prefix length can not be %d", mask);
-        return SR_ERR_INVAL_ARG;
+struct pathNode {
+    int index;
+    bool is_add;
+    string path;
+    string intf;
+    pathNode *next;
+};
+
+struct infoPaths {
+    pathNode *pathList;
+    pathNode *lastPath;
+};
+
+struct keyRoute {
+    string prefix;
+
+    keyRoute(const string key) : prefix(key) {}
+    bool operator<(const keyRoute& key) const { 
+        return (prefix.compare(key.prefix)<0);
     }
+};
 
-    rc = ipv46_config_add_del_route(prefix, mask, nhop, is_add, table, iface);
-    if (rc != SCVPP_OK) {
-        SRP_LOG_ERR("Add/delete route failed for %s %s", prefix, iface);
-        return SR_ERR_INVAL_ARG;
-    }
-
-    SRP_LOG_INF("Add/delete route Success for %s %s", prefix, iface);
-
-    return SR_ERR_OK;
-}
-
-#define STR(string) #string
-
-#define ROOT "/openconfig-local-routing:local-routes/static-routes/static[prefix='%s']/next-hops/next-hop[index='%s']/%s"
-
-static inline char * _get_ds_elem(sr_session_ctx_t *sess, const char *prefix,
-                                  const char *index, const char *sub)
-{
-    char xpath[XPATH_SIZE] = {0};
-    sr_val_t *value = NULL;
-    int rc;
-
-    snprintf(xpath, XPATH_SIZE, ROOT, prefix, index, sub);
-
-    rc = sr_get_item(sess, xpath, &value);
-    if (SR_ERR_OK != rc) {
-        SRP_LOG_DBG("XPATH %s not set", xpath);
-        return NULL;
-    }
-
-    return value->data.string_val;
-}
+typedef map<keyRoute, infoPaths> TMapRoutes;
+TMapRoutes mapOfRoutes;
 
 /* @brief add/del route to FIB table 0.
- * If you add/delete an entry to FIB, prefix is mandatory and next hop can be:
- *   - interface only
- *   - next hop IP
- *   - both interface and next hop IP
  */
-static int set_route(sr_session_ctx_t *sess, const char *index,
-                     const char *interface /* NULLABLE*/,
-                     const char *next_hop /* NULLABLE*/,
-                     const char *prefix, bool is_add)
+static inline int
+set_route(const string uuid, const char *prefix, pathNode *pathList)
 {
-    const char *iface = NULL;
-    const char *nhop = NULL;
+    int prefix_len;
 
-    ARG_CHECK3(SR_ERR_INVAL_ARG, sess, index, prefix);
-
-    if (!interface && !next_hop)
+    // Put prefix length in mask and prefix IP in prefix
+    prefix_len = ip_prefix_split(prefix);
+    if (prefix_len < 1) {
+        SRP_LOG_ERR("Prefix length can not be %d", prefix_len);
         return SR_ERR_INVAL_ARG;
+    }
 
-    if (!interface) //fetch interface in datastore, can return NULL
-        iface = _get_ds_elem(sess, prefix, index, "interface-ref/config/interface");
-    else //use interface provided
-        iface = interface;
+    try {
+        route::prefix_t pfx(prefix, prefix_len);
+        route::ip_route rt(pfx);
 
-    if (!next_hop) //fetch next-hop in datastore , can return NULL
-        nhop = _get_ds_elem(sess, prefix, index, "config/next-hop");
-    else //use next hop IP provided
-        nhop = next_hop;
-
-    return _set_route(prefix, nhop, is_add, iface);
-}
-
-/* @brief Callback used to add prefix entry for XPATH:
- * /openconfig-local-routing:local-routes/static-routes/static/config
- */
-static int
-oc_prefix_config_cb(sr_session_ctx_t *ds, const char *xpath,
-                      sr_notif_event_t event, void *private_ctx)
-{
-    UNUSED(ds); UNUSED(xpath); UNUSED(event); UNUSED(private_ctx);
-
-    SRP_LOG_INF("In %s", __FUNCTION__);
+        pathNode *node = pathList;
+        do {
+            boost::asio::ip::address nh = boost::asio::ip::address::from_string(node->path.c_str());
+            route::path path(0, nh);
+            (node->is_add) ? rt.add(path) : rt.remove(path);
+            OM::write(uuid, rt);
+            SRP_LOG_DBG("OM::WRITE ... %s", uuid.c_str());
+            node = node->next;
+        } while ( node != 0);
+    } catch (std::exception &exc) {
+        // catch boost exception from prefix_t
+        SRP_LOG_ERR("Error: %s", exc.what());
+        return SR_ERR_OPERATION_FAILED;
+    }
 
     return SR_ERR_OK;
 }
@@ -123,23 +99,22 @@ oc_prefix_config_cb(sr_session_ctx_t *ds, const char *xpath,
 static int oc_next_hop_config_cb(sr_session_ctx_t *ds, const char *xpath,
                                  sr_notif_event_t event, void *private_ctx)
 {
-    char prefix[VPP_IP4_PREFIX_STRING_LEN] = {0};
-    char next_hop[VPP_IP4_ADDRESS_STRING_LEN] = {0}; //IP of next router
-    char index[HOP_INDEX_SIZE]; //next hop index
-    bool index_set = false, next_hop_set = false;
     sr_change_iter_t *it;
     sr_change_oper_t oper;
-    sr_val_t *old, *new, *tmp;
+    sr_val_t *old_val, *new_val, *tmp;
     sr_xpath_ctx_t state = {0};
     int rc = SR_ERR_OK;
     UNUSED(private_ctx);
+
+    string prefix, next_hop, interface, ind;
+    int index;
 
     ARG_CHECK2(SR_ERR_INVAL_ARG, ds, xpath);
 
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    if (event == SR_EV_APPLY) //SR_EV_VERIFY already applied the changes
+    if (event == SR_EV_VERIFY)
         return SR_ERR_OK;
+
+    SRP_LOG_INF("In %s", __FUNCTION__);
 
     rc = sr_get_changes_iter(ds, (char *)xpath, &it);
     if (rc != SR_ERR_OK) {
@@ -147,168 +122,90 @@ static int oc_next_hop_config_cb(sr_session_ctx_t *ds, const char *xpath,
         return rc;
     }
 
-    foreach_change(ds, it, oper, old, new) {
-
-        rc = get_xpath_key(prefix, new->xpath, "static", "prefix",
-                           VPP_IP4_PREFIX_STRING_LEN, &state);
-        if (rc != 0)
-            goto error;
-
+    foreach_change(ds, it, oper, old_val, new_val) {
         switch (oper) {
-            case SR_OP_MODIFIED:
             case SR_OP_CREATED:
-                tmp = new;
+                tmp = new_val;
                 break;
             case SR_OP_DELETED:
-                tmp = old;
+                tmp = old_val;
                 break;
             default:
                 SRP_LOG_WRN_MSG("Operation not supported");
-                break;
+                continue;
         }
+        SRP_LOG_DBG("A change detected in '%s', op=%d", tmp->xpath, oper);
 
-        if (sr_xpath_node_name_eq(tmp->xpath, "config")) {
-            SRP_LOG_DBG("xpath: %s", tmp->xpath);
-        } else if (sr_xpath_node_name_eq(tmp->xpath, "index")) {
-            strncpy(index, tmp->data.string_val, HOP_INDEX_SIZE);
-            index_set = true;
-        } else if(sr_xpath_node_name_eq(tmp->xpath, "next-hop")) {
-            strncpy(next_hop, tmp->data.string_val, VPP_IP4_ADDRESS_STRING_LEN);
-            next_hop_set = true;
-        } else if(sr_xpath_node_name_eq(tmp->xpath, "recurse")) {
-            //SYSREPO BUG: Just catch it, sysrepo thinks it is mandatory...
-        } else { //metric, recurse
-            SRP_LOG_ERR("Unsupported field %s", tmp->xpath);
-            return SR_ERR_UNSUPPORTED;
-        }
+        prefix = sr_xpath_key_value(tmp->xpath, "static", "prefix", &state);
+        sr_xpath_recover(&state);
+        prefix.resize(prefix.length()-1);
 
-        if (index_set && next_hop_set) {
-            if (oper == SR_OP_CREATED) {
-                rc = set_route(ds, index, NULL, next_hop, prefix, true);
-            } else if (oper == SR_OP_MODIFIED) {
-                rc = set_route(ds, index, NULL, next_hop, prefix, false);
-                rc |= set_route(ds, index, NULL, next_hop, prefix, true);
-            } else if (oper == SR_OP_DELETED) {
-                rc = set_route(ds, index, NULL, next_hop, prefix, false);
+        // parse request
+        keyRoute key_route(prefix);
+        TMapRoutes::iterator vIter = mapOfRoutes.find(key_route);
+        if (sr_xpath_node_name_eq(tmp->xpath, "next-hop")) {
+            ind = sr_xpath_key_value(tmp->xpath, "next-hop", "index", &state);
+            sr_xpath_recover(&state);
+            index = atoi(ind.c_str());
+
+            next_hop = tmp->data.string_val;
+            // remove ending '$'
+            next_hop.resize(next_hop.length()-1);
+            if (vIter == mapOfRoutes.end())
+            {
+                infoPaths paths;
+                paths.pathList = new pathNode;
+                paths.lastPath = paths.pathList;
+                paths.lastPath->index = index;
+                paths.lastPath->path = next_hop;
+                paths.lastPath->next = 0;
+                paths.lastPath->is_add = (oper == SR_OP_CREATED);
+                mapOfRoutes.insert(TMapRoutes::value_type(key_route, paths));
+            } else {
+                infoPaths paths = vIter->second;
+                paths.pathList->next = new pathNode;
+                paths.lastPath = paths.pathList->next;
+                paths.lastPath->index = index;
+                paths.lastPath->path = next_hop;
+                paths.lastPath->next = 0;
+                paths.lastPath->is_add = (oper == SR_OP_CREATED);
             }
-
-            if (rc != 0) {
-                SRP_LOG_ERR_MSG("setting route failed");
-                goto error;
-            }
-            index_set = false; next_hop_set = false;
         }
 
-        sr_free_val(old);
-        sr_free_val(new);
+        sr_free_val(old_val);
+        sr_free_val(new_val);
         sr_xpath_recover(&state);
     }
 
-    sr_free_change_iter(it);
-    return rc;
+    // create/modify/delete routes
+    for (const auto &entry: mapOfRoutes)
+    {
+        string uuid = string(xpath) + "/" + entry.first.prefix + "/";
+        OM::mark_n_sweep ms(uuid);
+        SRP_LOG_DBG("OM::MS ... %s", uuid.c_str());
 
-error:
-    sr_free_val(old);
-    sr_free_val(new);
-    sr_xpath_recover(&state);
+        rc = set_route(uuid,
+                       entry.first.prefix.c_str(),
+                       entry.second.pathList);
+    }
+    // cleanup mapOfRoutes
+    for (const auto &entry: mapOfRoutes)
+    {
+        pathNode *node = entry.second.pathList, *next;
+        while (node != nullptr) {
+            next = node->next;
+            delete node;
+            node = next;
+        }
+    }
+    mapOfRoutes.clear();
+
     sr_free_change_iter(it);
     return rc;
 }
 
-// XPATH: /openconfig-local-routing:local-routes/static-routes/static[prefix='%s']/next-hops/next-hop[index='%s']/interface-ref/config/
-static int
-oc_next_hop_interface_config_cb(sr_session_ctx_t *ds, const char *xpath,
-                                sr_notif_event_t event, void *private_ctx)
-{
-    char prefix[VPP_IP4_PREFIX_STRING_LEN] = {0};
-    char interface[VPP_INTFC_NAME_LEN] = {0};
-    char index[HOP_INDEX_SIZE] = {0};
-    sr_change_iter_t *it = NULL;
-    sr_change_oper_t oper;
-    sr_val_t *old, *new, *tmp;
-    sr_xpath_ctx_t state = {0};
-    bool interface_set = false;
-    int rc = SR_ERR_OK;
-    UNUSED(private_ctx);
-
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    if (event == SR_EV_APPLY)
-        return SR_ERR_OK;
-
-    rc = sr_get_changes_iter(ds, (char *)xpath, &it);
-    if (rc != SR_ERR_OK) {
-        sr_free_change_iter(it);
-        return rc;
-    }
-
-    foreach_change(ds, it, oper, old, new) {
-
-        SRP_LOG_DBG("xpath: %s", new->xpath);
-
-        rc = get_xpath_key(prefix, new->xpath, "static", "prefix",
-                           VPP_IP4_PREFIX_STRING_LEN, &state);
-
-        rc |= get_xpath_key(index, new->xpath, "next-hop", "index",
-                           HOP_INDEX_SIZE, &state);
-        if (rc)
-            goto error;
-
-        switch (oper) {
-            case SR_OP_MODIFIED:
-            case SR_OP_CREATED:
-                tmp = new;
-                break;
-            case SR_OP_DELETED:
-                tmp = old;
-                break;
-            default:
-                SRP_LOG_WRN_MSG("Operation not supported");
-                break;
-        }
-
-        if (sr_xpath_node_name_eq(tmp->xpath, "config")) {
-            SRP_LOG_DBG("xpath: %s", tmp->xpath);
-        } else if (sr_xpath_node_name_eq(tmp->xpath, "interface")) {
-            strncpy(interface, tmp->data.string_val, VPP_INTFC_NAME_LEN);
-            interface_set = true;
-        } else { //metric, recurse
-            SRP_LOG_ERR("Unsupported field %s", tmp->xpath);
-            return SR_ERR_UNSUPPORTED;
-        }
-
-        if (oper == SR_OP_CREATED && interface_set) {
-            rc = set_route(ds, index, interface, NULL, prefix, true);
-            interface_set = false;
-        } else if (oper == SR_OP_MODIFIED && interface_set) {
-            rc = set_route(ds, index, interface, NULL, prefix, false);
-            rc |= set_route(ds, index, interface, NULL, prefix, true);
-            interface_set = false;
-        } else if (oper == SR_OP_DELETED && interface_set) {
-            rc = set_route(ds, index, interface, NULL, prefix, false);
-            interface_set = false;
-        }
-
-        if (rc != 0) {
-            SRP_LOG_ERR_MSG("setting route failed");
-            goto error;
-        }
-
-        sr_free_val(old);
-        sr_free_val(new);
-        sr_xpath_recover(&state);
-    }
-
-    sr_free_change_iter(it);
-    return SR_ERR_OK;
-
-error:
-    sr_free_val(old);
-    sr_free_val(new);
-    sr_xpath_recover(&state);
-    sr_free_change_iter(it);
-    return rc;
-}
+#define NUM_VALS_STATE_STATIC_ROUTE 1
+#define NUM_VALS_STATE_NEXT_HOP     2
 
 // XPATH: /openconfig-local-routing:local-routes/static-routes/static/state
 static int oc_prefix_state_cb(
@@ -316,41 +213,71 @@ static int oc_prefix_state_cb(
     uint64_t request_id, const char *original_xpath, void *private_ctx)
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
-    char prefix[VPP_IP4_PREFIX_STRING_LEN] = {0};
+    sr_val_t *vals = nullptr;
     sr_xpath_ctx_t state = {0};
-    sr_val_t *vals = NULL;
-    fib_dump_t *reply = NULL;
-    int vc = 1;
-    int rc = 0;
+    int cnt = 0;
 
-    ARG_CHECK3(SR_ERR_INVAL_ARG, xpath, values, values_cnt);
+    *values = nullptr;
+    *values_cnt = 0;
 
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    rc = get_xpath_key(prefix, (char *)xpath, "static", "prefix",
-                       VPP_IP4_PREFIX_STRING_LEN, &state);
-    if (rc != 0)
+    string req_prefix = sr_xpath_key_value((char*)xpath, "static", "prefix", &state);
+    req_prefix.resize(req_prefix.length()-1);
+    if (req_prefix.empty()) {
+        SRP_LOG_ERR("XPATH prefix NOT found", xpath);
         return SR_ERR_INVAL_ARG;
-
-    rc = ipv4_fib_dump_prefix(prefix, &reply);
-    if (rc == -SCVPP_NOT_FOUND) {
-        SRP_LOG_ERR("Prefix %s not found in VPP FIB", prefix);
-        return SR_ERR_NOT_FOUND;
     }
-
-    /* Allocation for number of elements dumped by ipv4_fib_dump_all */
-    rc = sr_new_values(vc, &vals);
-    if (SR_ERR_OK != rc)
-        return rc;
-
-    sr_val_build_xpath(&vals[0], "%s/prefix", xpath);
-    sr_val_set_str_data(&vals[0], SR_STRING_T, prefix);
-
     sr_xpath_recover(&state);
 
-    free(reply);
+    if (!sr_xpath_node_name_eq(xpath, "state"))
+        return SR_ERR_INVAL_ARG;
+
+    SRP_LOG_INF("In %s %s", __FUNCTION__, xpath);
+
+    /* allocate array of values to be returned */
+    if (0 != sr_new_values(NUM_VALS_STATE_STATIC_ROUTE, &vals))
+        return SR_ERR_OPERATION_FAILED;
+
+    char prefix[INET6_ADDRSTRLEN+5];
+    if (req_prefix.find(":") == string::npos) {
+        std::shared_ptr<route::ip_route_cmds::dump_v4_cmd> routes_fib4 =
+            std::make_shared<route::ip_route_cmds::dump_v4_cmd>();
+        HW::enqueue(routes_fib4);
+        HW::write();
+
+        for (auto& rt : *routes_fib4) {
+            vapi_payload_ip_fib_details payload = rt.get_payload();
+            if (sc_ntop(AF_INET, payload.address, prefix)) {
+                strcat(prefix,"/");
+                strcat(prefix, to_string((int)payload.address_length).c_str());
+                if (!req_prefix.compare(prefix)) {
+                    strcat(prefix, "$");
+                    sr_val_build_xpath(&vals[cnt], "%s/prefix", xpath);
+                    sr_val_set_str_data(&vals[cnt++], SR_STRING_T, prefix);
+                    break;
+                }
+            }
+        }
+    } else {
+        std::shared_ptr<route::ip_route_cmds::dump_v6_cmd> routes_fib6 =
+            std::make_shared<route::ip_route_cmds::dump_v6_cmd>();
+        HW::enqueue(routes_fib6);
+        HW::write();
+        for (auto& rt : *routes_fib6) {
+            vapi_payload_ip6_fib_details payload = rt.get_payload();
+            if (sc_ntop(AF_INET6, payload.address, prefix)) {
+                strcat(prefix,"/");
+                strcat(prefix, to_string((int)payload.address_length).c_str());
+                if (!req_prefix.compare(prefix)) {
+                    strcat(prefix, "$");
+                    sr_val_build_xpath(&vals[cnt], "%s/prefix", xpath);
+                    sr_val_set_str_data(&vals[cnt++], SR_STRING_T, prefix);
+                    break;
+                }
+            }
+        }
+    }
     *values = vals;
-    *values_cnt = vc;
+    *values_cnt = cnt;
 
     return SR_ERR_OK;
 }
@@ -362,129 +289,86 @@ oc_next_hop_state_cb(const char *xpath, sr_val_t **values, size_t *values_cnt,
                      void *private_ctx)
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
-    char prefix[VPP_IP4_PREFIX_STRING_LEN] = {0};
-    char index[HOP_INDEX_SIZE];
-    char next_hop[INET_ADDRSTRLEN] = {0};
-    fib_dump_t *reply = NULL;
     sr_xpath_ctx_t state = {0};
-    sr_val_t *vals = NULL;
-    int vc = 3;
-    int rc = 0;
+    sr_val_t *vals = nullptr;
+    int cnt = 0, index;
 
-    ARG_CHECK3(SR_ERR_INVAL_ARG, xpath, values, values_cnt);
+    *values = nullptr;
+    *values_cnt = 0;
 
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    /* Get prefix and index key from XPATH */
-    rc = get_xpath_key(prefix, (char *)xpath, "static", "prefix",
-                       VPP_IP4_PREFIX_STRING_LEN, &state);
-
-    rc |= get_xpath_key(index, (char*)xpath, "next-hop", "index",
-                        HOP_INDEX_SIZE, &state);
-
-    if (rc != 0)
-        return SR_ERR_INVAL_ARG;
-
-    rc = ipv4_fib_dump_prefix(prefix, &reply);
-    if (rc != SCVPP_OK) {
-        SRP_LOG_ERR("Fail to dump prefix %s", prefix);
+    string req_prefix = sr_xpath_key_value((char*)xpath, "static", "prefix", &state);
+    req_prefix.resize(req_prefix.length()-1);
+    if (req_prefix.empty()) {
+        SRP_LOG_ERR("XPATH prefix NOT found", xpath);
         return SR_ERR_INVAL_ARG;
     }
-
-    rc = sr_new_values(vc, &vals);
-    if (SR_ERR_OK != rc)
-        return rc;
-
-    // check next hop index equals next hop id
-    if (strtoul(index, NULL, 0) != reply->path[0].next_hop_id) {
-        SRP_LOG_ERR("next hop index is %d for prefix %s",
-                     reply->path[0].next_hop_id, prefix);
-        SRP_LOG_ERR("before %s, stroul is %lu", index, strtoul(index, NULL, 0));
-        return SR_ERR_INVAL_ARG;
-    }
-
-    sr_val_build_xpath(&vals[0], "%s/index", xpath);
-    sr_val_set_str_data(&vals[0], SR_STRING_T, index);
-
-    strncpy(next_hop, sc_ntoa(reply->path[0].next_hop), VPP_IP4_ADDRESS_LEN);
-    sr_val_build_xpath(&vals[1], "%s/next-hop", xpath);
-    sr_val_set_str_data(&vals[1], SR_STRING_T, (char *)reply->path[0].next_hop);
-
-    sr_val_build_xpath(&vals[2], "%s/metric", xpath);
-    vals[2].type = SR_UINT32_T;
-    vals[2].data.uint32_val = reply->path[0].weight;
-
-    free(reply);
     sr_xpath_recover(&state);
-    *values = vals;
-    *values_cnt = vc;
 
-    return SR_ERR_OK;
-}
-
-// XPATH /openconfig-local-routing:local-routes/static-routes/static/next-hops/next-hop/interface-ref/state
-static int
-oc_next_hop_interface_state_cb(const char *xpath, sr_val_t **values,
-                               size_t *values_cnt, uint64_t request_id,
-                               const char *original_xpath, void *private_ctx)
-{
-    UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
-    sr_xpath_ctx_t state = {0};
-    char prefix[VPP_IP4_PREFIX_STRING_LEN] = {0};
-    char interface[VPP_INTFC_NAME_LEN] = {0};
-    char index[HOP_INDEX_SIZE]; //next hop index
-    fib_dump_t *reply = NULL;
-    sr_val_t *vals = NULL;
-    int vc = 1;
-    int rc = 0;
-
-    //ARG_CHECK3(SR_ERR_INVAL_ARG, xpath, values, values_cnt);
-
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    ///* Get prefix key from XPATH */
-    rc = get_xpath_key(prefix, (char*) xpath, "static", "prefix",
-                       VPP_IP4_PREFIX_STRING_LEN, &state);
-
-    rc |= get_xpath_key(index, (char *)xpath, "next-hop", "index",
-                        HOP_INDEX_SIZE, &state);
-
-    if (rc != 0)
-        return SR_ERR_INVAL_ARG;
-
-    rc = ipv4_fib_dump_prefix(prefix, &reply);
-    if (rc != SCVPP_OK) {
-        SRP_LOG_ERR("Fail to dump prefix %s", prefix);
-        return SR_ERR_INVAL_ARG;
-    }
-    //TODO: check nhop?
-
-    rc = sr_new_values(vc, &vals);
-    if (SR_ERR_OK != rc)
-        return rc;
-
-    // check next hop index equals next hop id
-    if (strtoul(index, NULL, 0) != reply->path[0].next_hop_id) {
-        SRP_LOG_ERR("next hop index is %d for prefix %s",
-                     reply->path[0].next_hop_id, prefix);
-        SRP_LOG_ERR("before %s, stroul is %lu", index, strtoul(index, NULL, 0));
-        return SR_ERR_INVAL_ARG;
-    }
-
-    rc = get_interface_name(interface, reply->path[0].sw_if_index);
-    if (rc != SCVPP_OK) {
-        SRP_LOG_ERR("No interface name for id %d", reply->path[0].sw_if_index);
-        return SR_ERR_INVAL_ARG;
-    }
-
-    sr_val_build_xpath(&vals[0], "%s/interface", xpath);
-    sr_val_set_str_data(&vals[0], SR_STRING_T, interface);
-
-    free(reply);
+    string req_index = sr_xpath_key_value((char*)xpath, "next-hop", "index", &state);
     sr_xpath_recover(&state);
-    *values = vals;
-    *values_cnt = vc;
 
+    if (!sr_xpath_node_name_eq(xpath, "state"))
+        return SR_ERR_INVAL_ARG;
+
+    SRP_LOG_INF("In %s %s", __FUNCTION__, xpath);
+
+    /* allocate array of values to be returned */
+    if (0 != sr_new_values(NUM_VALS_STATE_NEXT_HOP, &vals))
+        return SR_ERR_OPERATION_FAILED;
+
+    char prefix[INET6_ADDRSTRLEN+1];
+    char next_hop[INET6_ADDRSTRLEN+1];
+    if (req_prefix.find(":") == string::npos) {
+        std::shared_ptr<route::ip_route_cmds::dump_v4_cmd> routes_fib4 =
+            std::make_shared<route::ip_route_cmds::dump_v4_cmd>();
+        HW::enqueue(routes_fib4);
+        HW::write();
+
+        for (auto &rt : *routes_fib4) {
+            vapi_payload_ip_fib_details payload = rt.get_payload();
+            if (sc_ntop(AF_INET, payload.address, prefix)) {
+                strcat(prefix,"/");
+                strcat(prefix, to_string((int)payload.address_length).c_str());
+                index = atoi(req_index.c_str());
+                if (!req_prefix.compare(prefix) &&
+                    index>-1 && index<payload.count) {
+                    if (sc_ntop(AF_INET, payload.path[index].next_hop, next_hop)) {
+                        strcat(next_hop, "$");
+                        sr_val_build_xpath(&vals[cnt], "%s/index", xpath);
+                        sr_val_set_str_data(&vals[cnt++], SR_STRING_T, req_index.c_str());
+                        sr_val_build_xpath(&vals[cnt], "%s/next-hop", xpath);
+                        sr_val_set_str_data(&vals[cnt++], SR_STRING_T, next_hop);
+                    }
+                }
+            }
+        }
+    } else {
+        std::shared_ptr<route::ip_route_cmds::dump_v6_cmd> routes_fib6 =
+            std::make_shared<route::ip_route_cmds::dump_v6_cmd>();
+        HW::enqueue(routes_fib6);
+        HW::write();
+
+        for (auto &rt : *routes_fib6) {
+            vapi_payload_ip6_fib_details payload = rt.get_payload();
+            if (sc_ntop(AF_INET6, payload.address, prefix)) {
+                strcat(prefix,"/");
+                strcat(prefix, to_string((int)payload.address_length).c_str());
+                index = atoi(req_index.c_str());
+                if (!req_prefix.compare(prefix) &&
+                    index>-1 && index<payload.count) {
+                    if (sc_ntop(AF_INET6, payload.path[index].next_hop, next_hop)) {
+                        strcat(next_hop, "$");
+                        sr_val_build_xpath(&vals[cnt], "%s/index", xpath);
+                        sr_val_set_str_data(&vals[cnt++], SR_STRING_T, req_index.c_str());
+                        sr_val_build_xpath(&vals[cnt], "%s/next-hop", xpath);
+                        sr_val_set_str_data(&vals[cnt++], SR_STRING_T, next_hop);
+                    }
+                }
+            }
+        }
+    }
+    *values = vals;
+    *values_cnt = cnt;
     return SR_ERR_OK;
 }
 
@@ -495,19 +379,13 @@ openconfig_local_routing_init(sc_plugin_main_t *pm)
     SRP_LOG_DBG_MSG("Initializing openconfig-local-routing plugin.");
 
     rc = sr_subtree_change_subscribe(pm->session, "/openconfig-local-routing:local-routes/static-routes/static/config",
-            oc_prefix_config_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+            oc_next_hop_config_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
     if (SR_ERR_OK != rc) {
         goto error;
     }
 
     rc = sr_subtree_change_subscribe(pm->session, "/openconfig-local-routing:local-routes/static-routes/static/next-hops/next-hop/config",
             oc_next_hop_config_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
-    if (SR_ERR_OK != rc) {
-        goto error;
-    }
-
-    rc = sr_subtree_change_subscribe(pm->session, "/openconfig-local-routing:local-routes/static-routes/static/next-hops/next-hop/interface-ref/config",
-            oc_next_hop_interface_config_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
     if (SR_ERR_OK != rc) {
         goto error;
     }
@@ -524,12 +402,6 @@ openconfig_local_routing_init(sc_plugin_main_t *pm)
         goto error;
     }
 
-    rc = sr_dp_get_items_subscribe(pm->session, "/openconfig-local-routing:local-routes/static-routes/static/next-hops/next-hop/interface-ref/state",
-            oc_next_hop_interface_state_cb, NULL, SR_SUBSCR_CTX_REUSE, &pm->subscription);
-    if (SR_ERR_OK != rc) {
-        goto error;
-    }
-
     SRP_LOG_DBG_MSG("openconfig-local-routing plugin initialized successfully.");
     return SR_ERR_OK;
 
@@ -539,10 +411,7 @@ error:
 }
 
 void
-openconfig_local_routing_exit(__attribute__((unused)) sc_plugin_main_t *pm)
-{
-}
+openconfig_local_routing_exit(__attribute__((unused)) sc_plugin_main_t *pm) {}
 
 SC_INIT_FUNCTION(openconfig_local_routing_init);
 SC_EXIT_FUNCTION(openconfig_local_routing_exit);
-

@@ -1,0 +1,109 @@
+module interface-nat {
+  yang-version 1;
+  namespace "http://fd.io/hc2vpp/yang/interface-nat";
+  prefix "if-nat";
+
+  import ietf-interfaces {
+    prefix "if";
+  }
+  import yang-ext {
+    prefix "ext";
+  }
+
+  organization
+    "FD.io - The Fast Data Project";
+
+  contact
+    "Hc2vpp Wiki <https://wiki.fd.io/view/Hc2vpp>
+     Mailing List <hc2vpp@lists.fd.io>";
+
+  description
+    "This module contains a collection of YANG definitions for
+     applying NAT configuration on VPP interfaces.
+
+     Copyright (c) 2016-2017 Cisco and/or its affiliates.
+
+     Licensed under the Apache License, Version 2.0 (the 'License');
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at:
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an 'AS IS' BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.";
+
+  revision "2017-08-16" {
+    description "Added support for NAT64.";
+  }
+
+  revision "2017-08-01" {
+    description "Added support for nat_interface_add_del_output_feature.";
+  }
+
+  revision "2016-12-14" {
+    description "Initial revision of interface-nat model.";
+  }
+
+  grouping interface-nat-vpp-feature-attributes {
+    leaf post-routing {
+      type boolean;
+      default false;
+      description
+        "Indicates whether NAT translation should be applied after routing.
+         If true, nat_interface_add_del_output_feature message is used to enable NAT.
+         By default nat_interface_add_del_feature is used.";
+      reference
+        "https://git.fd.io/vpp/tree/src/plugins/nat/nat.api";
+    }
+
+    leaf nat44-support {
+      type boolean;
+      default true;
+      description
+        "Indicates NAT44 support. Enabled by default in order to preserve compatibility with previous versions of the model.";
+    }
+
+    leaf nat64-support {
+      type boolean;
+      description
+        "Indicates NAT64 support";
+    }
+
+    leaf nat66-support {
+      type boolean;
+      description
+        "Indicates NAT66 support";
+    }
+
+    reference
+      "https://wiki.fd.io/view/VPP/SNAT";
+  }
+
+  grouping interface-nat-attributes {
+    container nat {
+      container inbound {
+        presence "Enables inbound NAT";
+        uses interface-nat-vpp-feature-attributes;
+      }
+      container outbound {
+        presence "Enables outbound NAT";
+        uses interface-nat-vpp-feature-attributes;
+      }
+    }
+  }
+
+  augment /if:interfaces/if:interface {
+    ext:augment-identifier "nat-interface-augmentation";
+
+    uses interface-nat-attributes;
+  }
+
+  augment /if:interfaces-state/if:interface {
+    ext:augment-identifier "nat-interface-state-augmentation";
+
+    uses interface-nat-attributes;
+  }
+}
