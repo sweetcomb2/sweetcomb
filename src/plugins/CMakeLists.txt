@@ -12,22 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.0)
-project(sysrepo-vpp-plugins)
-
 # DEPENDENCIES
 ##############
-
-# Cmake find modules directory
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake")
 
 # check for required packages
 find_package(VPP) #use FindVPP.cmake
 find_package(PkgConfig) #official cmake module
 pkg_check_modules(SYSREPO REQUIRED libsysrepo) #PkgConfig cmake module maccro
-
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../scvpp scvpp_out)
-include_directories(${CMAKE_CURRENT_LIST_DIR}/../scvpp/inc)
 
 # get sysrepo plugins directory from pkgconfig
 if (NOT SR_PLUGINS_DIR)
@@ -60,18 +51,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(PLUGINS_SOURCES
     sc_init.c
     sc_plugins.c
-    ietf/ietf_interface.c
-    ietf/ietf_nat.c
-    openconfig/openconfig_interfaces.c
-    openconfig/openconfig_local_routing.c
 )
 
 # build the source code into shared library
-add_library(vpp-plugins SHARED ${PLUGINS_SOURCES})
-target_link_libraries(vpp-plugins ${SYSREPO_LIBRARIES} scvpp)
+add_library(sweetcomb SHARED ${PLUGINS_SOURCES})
+target_link_libraries(sweetcomb ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
+                        ${VOM_LIBRARY})
 
 # INSTALL
 #########
 
 # install the plugin into plugins dir
-install(TARGETS vpp-plugins DESTINATION ${SR_PLUGINS_DIR})
+install(TARGETS sweetcomb DESTINATION ${SR_PLUGINS_DIR})

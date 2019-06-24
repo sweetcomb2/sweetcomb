@@ -25,4 +25,4 @@ RUN apt-get install -y \
 COPY . /root/src/sweetcomb
 WORKDIR /root/src/sweetcomb
 
-RUN make install-dep && make build-scvpp && make build-plugins
+RUN make install-dep && make build-plugins
