@@ -26,7 +26,7 @@ find_package(VPP) #use FindVPP.cmake
 find_package(PkgConfig) #official cmake module
 pkg_check_modules(SYSREPO REQUIRED libsysrepo) #PkgConfig cmake module maccro
 
-find_package(Boost 1.40 COMPONENTS program_options REQUIRED)
+find_package(Boost)
 include_directories(${Boost_INCLUDE_DIR})
 
 # get sysrepo plugins directory from pkgconfig
@@ -60,10 +60,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(PLUGINS_SOURCES
     sc_init.c
     sc_plugins.c
-    ietf/ietf_interface.cpp
-#     ietf/ietf_nat.c
-#     openconfig/openconfig_interfaces.c
-#     openconfig/openconfig_local_routing.c
+    ietf/ietf_interface.c
+    ietf/ietf_nat.c
+    openconfig/openconfig_acl.c
+    openconfig/openconfig_interfaces.c
+    openconfig/openconfig_local_routing.c
 )
 
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
@@ -71,7 +72,7 @@ set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
 # build the source code into shared library
 add_library(vpp-plugins SHARED ${PLUGINS_SOURCES})
 target_link_libraries(vpp-plugins ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
-                        ${VOM_LIBRARY})
+                      ${VOM_LIBRARY})
 
 # INSTALL
 #########

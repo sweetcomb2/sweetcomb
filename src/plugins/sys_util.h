@@ -160,7 +160,7 @@ prefix2ip4(char *dst, const char *src, uint8_t *prefix_length)
 
     strncpy(dst, src, size);
 
-    if (!prefix_length)
+    if (prefix_length)
         *prefix_length = atoi(++p);
 
     return 0;
@@ -190,7 +190,7 @@ prefix2ip6(char *dst, const char *src, uint8_t *prefix_length)
 
     strncpy(dst, src, size);
 
-    if (!prefix_length)
+    if (prefix_length)
         *prefix_length = atoi(++p);
 
     return 0;
@@ -280,6 +280,61 @@ static inline int get_last_ip_address(sc_ipv4_addr* last_ip_address,
 {
     return get_network_broadcast(last_ip_address, first_ip_address,
                                  prefix_length);
+}
+/*
+static inline int sc_aton(const char *cp, uint8_t * buf, size_t length)
+{
+    ARG_CHECK2(false, cp, buf);
+
+    struct in_addr addr;
+    int ret = inet_aton(cp, &addr);
+
+    if (0 == ret)
+        return -EINVAL;
+
+    if (sizeof(addr) > length)
+        return -EINVAL;
+
+    memcpy(buf, &addr, sizeof (addr));
+
+    return 0;
+}
+
+static inline char* sc_ntoa(const uint8_t * buf)
+{
+    ARG_CHECK(NULL, buf);
+
+    struct in_addr addr;
+    memcpy(&addr, buf, sizeof(addr));
+    return inet_ntoa(addr);
+}
+*/
+static inline int sc_pton(int af, const char *cp, uint8_t * buf)
+{
+    ARG_CHECK2(false, cp, buf);
+
+    int ret = inet_pton(af, cp, buf);
+
+    if (0 == ret)
+        return -EINVAL;
+
+    return 0;
+}
+
+static inline const char* sc_ntop(int af, const uint8_t * buf, char *addr)
+{
+    ARG_CHECK(NULL, buf);
+    ARG_CHECK(NULL, addr);
+
+    socklen_t size = 0;
+    if (af == AF_INET)
+        size = INET_ADDRSTRLEN;
+    else if (af == AF_INET6)
+        size = INET6_ADDRSTRLEN;
+    else
+        return NULL;
+
+    return inet_ntop(af, (void*)buf, addr, size);
 }
 
 #endif /* __SYS_UTIL_H__ */

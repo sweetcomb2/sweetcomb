@@ -147,7 +147,7 @@ class Topology:
         #print("Start NetconfClient")
         try:
             self.netconf_client = NetConfClient(address="127.0.0.1",
-                                                username="root", password="0000")
+                                                username="user", password="user")
             self.process.append(self.netconf_client)
         except RuntimeError as err:
             print("NetConfClient failed, {}".format(err))
