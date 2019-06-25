@@ -61,8 +61,10 @@ set(PLUGINS_SOURCES
     sc_plugins.c
     sys_util.cpp
     vpp-oper/interface.cpp
+    vpp-oper/route.cpp
     ietf/ietf_interface.cpp
     openconfig/openconfig_interfaces.cpp
+    openconfig/openconfig_local_routing.cpp
 )
 
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
