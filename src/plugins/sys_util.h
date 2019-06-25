@@ -308,7 +308,7 @@ static inline char* sc_ntoa(const uint8_t * buf)
     memcpy(&addr, buf, sizeof(addr));
     return inet_ntoa(addr);
 }
-
+*/
 static inline int sc_pton(int af, const char *cp, uint8_t * buf)
 {
     ARG_CHECK2(false, cp, buf);
@@ -320,7 +320,7 @@ static inline int sc_pton(int af, const char *cp, uint8_t * buf)
 
     return 0;
 }
-*/
+
 static inline const char* sc_ntop(int af, const uint8_t * buf, char *addr)
 {
     ARG_CHECK(NULL, buf);

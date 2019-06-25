@@ -62,6 +62,7 @@ set(PLUGINS_SOURCES
     sc_plugins.c
     ietf/ietf_interface.c
     ietf/ietf_nat.c
+    openconfig/openconfig_acl.c
     openconfig/openconfig_interfaces.c
     openconfig/openconfig_local_routing.c
 )
