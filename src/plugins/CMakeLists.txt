@@ -63,6 +63,7 @@ set(PLUGINS_SOURCES
     vpp-oper/interface.cpp
     ietf/ietf_interface.cpp
     openconfig/openconfig_interfaces.cpp
+    ietf/ietf_nat.cpp
 )
 
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)

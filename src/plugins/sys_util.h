@@ -40,13 +40,6 @@ using namespace std;
 
 #define XPATH_SIZE 2000
 
-#define VPP_IP4_HOST_PREFIX_LEN 32
-#define VPP_IP4_ADDRESS_LEN 4           /* IPv4 length in VPP format */
-/* IPv4 and IPv6 length in string format */
-#define VPP_IP4_ADDRESS_STRING_LEN INET_ADDRSTRLEN //16, include '\0'
-#define VPP_IP4_PREFIX_STRING_LEN \
-    INET_ADDRSTRLEN + sizeof('/') + 2 // include '\0'
-
 #define ARG_CHECK(retval, arg) \
     do \
     { \
@@ -136,6 +129,9 @@ public:
     /* Extract IP "AAA.BBB.CCC.DDD" from an IP prefix: "AAA.BBB.CCC.DDD/ZZ"
      * "YYYY:YYYY:YYYY:YYYY:YYYY:YYYY:YYYY:YYYY/ZZZ */
     boost::asio::ip::address address() const;
+
+    /* Return true if prefix is empty */
+    bool empty() const;
 
     friend ostream& operator<<(ostream& os, const prefix& p);
 

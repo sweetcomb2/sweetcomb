@@ -23,6 +23,12 @@ prefix::prefix(std::string p)
     m_prefix_len =  std::stoi(p.substr(found+1, p.length()));
 }
 
+prefix prefix::make_prefix(std::string str)
+{
+    prefix tmp(str);
+    return prefix(tmp);
+}
+
 unsigned short prefix::prefix_length() const
 {
     return m_prefix_len;
@@ -45,6 +51,11 @@ std::ostream& operator<<(std::ostream& os, const prefix& p)
     os << p.to_string();
 
     return os;
+}
+
+bool prefix::empty() const
+{
+    return to_string().empty();
 }
 
 }
