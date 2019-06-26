@@ -59,6 +59,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(PLUGINS_SOURCES
     sc_init.c
     sc_plugins.c
+    vpp-oper/interface.cpp
     ietf/ietf_interface.cpp
 )
 

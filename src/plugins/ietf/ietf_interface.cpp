@@ -22,12 +22,13 @@
 #include <vom/l3_binding.hpp>
 #include <vom/route.hpp>
 
-#include "sc_plugins.h"
+#include <vpp-oper/interface.hpp>
 
-#include <vpp-api/client/stat_client.h>
+#include "sc_plugins.h"
 
 using VOM::interface;
 using VOM::OM;
+using VOM::HW;
 using VOM::l3_binding;
 using VOM::rc_t;
 
@@ -278,35 +279,6 @@ ietf_interface_change_cb(sr_session_ctx_t *session, const char *xpath,
     return SR_ERR_OK;
 }
 
-static std::string
-yang_interface_type(const interface::type_t type)
-{
-    if (type == interface::type_t::BVI)
-        return ""; //TODO
-    else if (type == interface::type_t::VXLAN)
-        return "iana-if-type:vxlan-tunnel"; //v3po type
-    else if (type == interface::type_t::AFPACKET)
-        return ""; //TODO
-    else if (type == interface::type_t::LOCAL)
-        return ""; //TODO
-    else if (type == interface::type_t::TAPV2)
-        return "iana-if-type:tap"; //v3po type
-    else if (type == interface::type_t::VHOST)
-        return "iana-if-type:vhost-user"; //v3po type
-    else if (type == interface::type_t::BOND)
-        return ""; //TODO
-    else if (type == interface::type_t::PIPE)
-        return ""; //TODO
-    else if (type == interface::type_t::PIPE_END)
-        return ""; //TODO
-    else if (type == interface::type_t::ETHERNET)
-        return "iana-if-type:ethernetCsmacd"; //IANA ifType
-    else if (type == interface::type_t::LOOPBACK)
-        return "iana-if-type:softwareLoopback"; //IANA ifType
-    else
-        return "";
-}
-
 /**
  * @brief Callback to be called by any request for state data under "/ietf-interfaces:interfaces-state/interface" path.
  * Here we reply systematically with all interfaces, it the responsability of
@@ -318,21 +290,24 @@ ietf_interface_state_cb(const char *xpath, sr_val_t **values,
                         const char *original_xpath, void *private_ctx)
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
-    struct elt* stack;
+    vapi_payload_sw_interface_details interface;
+    std::shared_ptr<interface_dump> dump;
     sr_val_t *val = nullptr;
-    int vc = 5; //number of answer per interfaces
+    int vc = 6; //number of answer per interfaces
     int cnt = 0; //value counter
     int interface_num = 0;
-    std::ostringstream os;
     int rc = SR_ERR_OK;
-    std::shared_ptr<interface> interface;
 
     SRP_LOG_INF("In %s", __FUNCTION__);
 
     if (!sr_xpath_node_name_eq(xpath, "interface"))
         goto nothing_todo; //no interface field specified
 
-    interface_num =  std::distance(interface::cbegin(), interface::cend());
+    dump = std::make_shared<interface_dump>();
+    HW::enqueue(dump);
+    HW::write();
+
+    interface_num = std::distance((*dump).begin(), (*dump).end());
 
     /* allocate array of values to be returned */
     SRP_LOG_DBG("number of interfaces: %d",  interface_num + 1);
@@ -340,35 +315,47 @@ ietf_interface_state_cb(const char *xpath, sr_val_t **values,
     if (0 != rc)
         goto nothing_todo;
 
-    for (auto it = interface::cbegin(); it != interface::cend(); it++) {
-        interface = it->second.lock();
+    for (auto &it : *dump) {
+        interface = it.get_payload();
 
-        SRP_LOG_DBG("State of interface %s", interface->name().c_str());
-
-        sr_val_build_xpath(&val[cnt], "%s[name='%s']/type", xpath,
-                           interface->name().c_str());
-        sr_val_set_str_data(&val[cnt], SR_IDENTITYREF_T,
-                            yang_interface_type(interface->type()).c_str());
-        cnt++;
+        SRP_LOG_DBG("State of interface %s", interface.interface_name);
 
         /* it needs if-mib YANG feature to work !
          * admin-state: state as required by configuration */
         sr_val_build_xpath(&val[cnt], "%s[name='%s']/admin-status", xpath,
-                           interface->name().c_str());
-        sr_val_set_str_data(&val[cnt], SR_ENUM_T, "down"); //TODO "up" or "down"
+                           interface.interface_name);
+        sr_val_set_str_data(&val[cnt], SR_ENUM_T,
+                            interface.admin_up_down ? "up" : "down");
         cnt++;
 
         /* oper-state: effective state. can differ from admin-state */
         sr_val_build_xpath(&val[cnt], "%s[name='%s']/oper-status", xpath,
-                           interface->name().c_str());
-        sr_val_set_str_data(&val[cnt], SR_ENUM_T, "down"); //TODO "up" or "down"
+                           interface.interface_name);
+        sr_val_set_str_data(&val[cnt], SR_ENUM_T,
+                            interface.link_up_down ? "up" : "down");
         cnt++;
 
         sr_val_build_xpath(&val[cnt], "%s[name='%s']/phys-address", xpath,
-                           interface->name().c_str());
-        sr_val_build_str_data(&val[cnt], SR_STRING_T, "%s",
-                              interface->l2_address().to_string().c_str());
+                           interface.interface_name);
+        sr_val_build_str_data(&val[cnt], SR_STRING_T,
+                              "%02x:%02x:%02x:%02x:%02x:%02x",
+                              interface.l2_address[0], interface.l2_address[1],
+                              interface.l2_address[2], interface.l2_address[3],
+                              interface.l2_address[4], interface.l2_address[5]);
         cnt++;
+
+        sr_val_build_xpath(&val[cnt], "%s[name='%s']/if-index", xpath,
+                           interface.interface_name);
+        val[cnt].type = SR_INT32_T;
+        val[cnt].data.int32_val = interface.sw_if_index;
+        cnt++;
+
+        sr_val_build_xpath(&val[cnt], "%s[name='%s']/speed", xpath,
+                           interface.interface_name);
+        val[cnt].type = SR_UINT64_T;
+        val[cnt].data.uint64_val = interface.link_speed;
+        cnt++;
+
     }
 
     *values = val;
@@ -413,13 +400,14 @@ interface_statistics_cb(const char *xpath, sr_val_t **values,
     strncpy(interface_name, tmp, VPP_INTFC_NAME_LEN);
     sr_xpath_recover(&state);
 
+    interface = interface::find(interface_name);
+    if (interface == nullptr)
+        goto nothing_todo;
+
     /* allocate array of values to be returned */
     rc = sr_new_values(vc, &val);
     if (0 != rc)
         goto nothing_todo;
-
-    //TODO this probably does not work
-    interface = interface::find(interface_name);
 
     stats = interface->get_stats();
 
