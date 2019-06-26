@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019 PANTHEON.tech.
+ * Copyright (c) 2019 Cisco and/or its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,36 +15,59 @@
  * limitations under the License.
  */
 
-#include <scvpp/comm.h>
-#include <scvpp/interface.h>
-#include <scvpp/nat.h>
+#include <sys_util.h>
+#include "sc_plugins.h"
 
-#include <sc_plugins.h>
+#include <vom/om.hpp>
+#include <vom/prefix.hpp>
+#include <vom/types.hpp>
+#include <vom/nat_static.hpp>
+#include <vom/nat_static_cmds.hpp>
+#include <vom/nat_binding.hpp>
+#include <vom/nat_binding_cmds.hpp>
 
-#include <assert.h>
-#include <string.h>
-#include <sysrepo.h>
-#include <sysrepo/xpath.h>
-#include <sysrepo/values.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <string>
+#include <exception>
 
-/**
- * @brief Wrapper struct for VAPI address range payload.
- */
-struct address_range_t {
-    nat44_add_del_address_range_t payload; //< VAPI payload for address range.
-    bool last_ip_address_set; //< Variable last_ip_address in payload is set.
+using namespace boost;
+using namespace std;
+using namespace VOM;
+
+#define MODULE_NAME "ietf-nat-client"
+
+enum mapping_type {
+    STATIC = 0,
+    DYNAMIC_IMPLICIT,
+    DYNAMIC_EXPLICIT,
+    UNKNOWN,
 };
 
-// Check input structure, set VAPI payload and call VAPI function to set
-// nat44 address range.
-static sr_error_t set_address_range(struct address_range_t *address_r)
+struct nat_interface_t {
+    bool inbound_nat44;
+    bool inbound_nat64;
+    bool inbound_nat66;
+    bool outbound_nat44;
+    bool outbound_nat64;
+    bool outbound_nat66;
+};
+
+/**
+ * @brief Wrapper struct for VOM address range
+ */
+struct address_range_t {
+    int vrf_id;
+    string first_ip;
+    string last_ip;
+};
+
+static sr_error_t nat_external_ip_address_add_del(address_range_t *address_rng, bool is_add)
 {
     sr_error_t rc = SR_ERR_OK;
-//     char tmp_ip1[VPP_IP4_ADDRESS_STRING_LEN];
-//     char tmp_ip2[VPP_IP4_ADDRESS_STRING_LEN];
+
+    SRP_LOG_ERR("External ip range : %s -> %s", address_rng->first_ip.c_str(), address_rng->last_ip.c_str());
+/*
+    //     char tmp_ip1[VPP_IP4_ADDRESS_STRING_LEN];
+    //     char tmp_ip2[VPP_IP4_ADDRESS_STRING_LEN];
 
     ARG_CHECK(SR_ERR_INVAL_ARG, address_r);
 
@@ -60,246 +84,232 @@ static sr_error_t set_address_range(struct address_range_t *address_r)
         return SR_ERR_INVAL_ARG;
     }
 
-//     strncpy(tmp_ip1, sc_ntoa(address_r->payload.first_ip_address),
-//             VPP_IP4_ADDRESS_STRING_LEN);
-//     strncpy(tmp_ip2, sc_ntoa(address_r->payload.last_ip_address),
-//             VPP_IP4_ADDRESS_STRING_LEN);
-//     SRP_LOG_DBG("Fist ip address: %s, last ip address: %s, twice_nat: %u,"
-//                 "is_add: %u", tmp_ip1, tmp_ip2, address_r->payload.twice_nat,
-//                 address_r->payload.is_add);
+    //     strncpy(tmp_ip1, sc_ntoa(address_r->payload.first_ip_address),
+    //             VPP_IP4_ADDRESS_STRING_LEN);
+    //     strncpy(tmp_ip2, sc_ntoa(address_r->payload.last_ip_address),
+    //             VPP_IP4_ADDRESS_STRING_LEN);
+    //     SRP_LOG_DBG("Fist ip address: %s, last ip address: %s, twice_nat: %u,"
+    //                 "is_add: %u", tmp_ip1, tmp_ip2, address_r->payload.twice_nat,
+    //                 address_r->payload.is_add);
 
     int rv = nat44_add_del_addr_range(&address_r->payload);
     if (0 != rv) {
         SRP_LOG_ERR_MSG("Failed set address range.");
         rc = SR_ERR_OPERATION_FAILED;
     }
-
+*/
     return rc;
 }
 
-// parse leaf from this xpath:
-// /ietf-nat:nat/instances/instance[id='%s']/policy[id='%s']/external-ip-address-pool[pool-id='%s']/
-static int parse_instance_policy_external_ip_address_pool(
-    const sr_val_t *val, struct address_range_t *address_range)
+static inline int get_network_broadcast_address(string *ip_broadcast,
+    const string ip_prefix,
+    uint8_t prefix_length)
+{
+    uint8_t mask = ~0;
+    uint8_t prefix = prefix_length;
+    vector<string> ip_address;
+    const char* delim = ".";
+
+    if (32 < prefix_length) {
+        SRP_LOG_ERR_MSG("Prefix length to big.");
+        return -1;
+    }
+
+    char *token = strtok(const_cast<char*>(ip_prefix.c_str()), delim);
+    while (token != nullptr)
+    {
+        ip_address.push_back(string(token));
+        token = strtok(nullptr, delim);
+	}
+
+    for (vector<string>::iterator it = ip_address.begin(); it != ip_address.end();) {
+        uint8_t ip = (uint8_t)stoi(*it);
+        ip_broadcast->append(
+                    to_string( ip  | (mask >> (prefix > 8 ? 8 : prefix))));
+        if ((++it) != ip_address.end()) {
+            ip_broadcast->append(".");
+            if (prefix >= 8) {
+                prefix -= 8;
+            } else {
+                prefix = 0;
+            }
+        }
+    }
+    return 0;
+}
+
+// parse leafs of xpath: /ietf-nat:nat/instances/instance[id='%s']/policy[id='%s']/external-ip-address-pool[pool-id='%s']/
+static int parse_policy_entry(
+    const sr_val_t *val, address_range_t *address_range)
 {
     int rc;
     char tmp_str[VPP_IP4_PREFIX_STRING_LEN] = {0};
-    uint8_t prefix = 0;
+    uint8_t prefix_len = 0;
 
     ARG_CHECK2(SR_ERR_INVAL_ARG, val, address_range);
 
-    if (sr_xpath_node_name_eq(val->xpath, "pool-id")) {
-        SRP_LOG_WRN("%s not supported.", val->xpath);
-    } else if(sr_xpath_node_name_eq(val->xpath, "external-ip-pool")) {
-        rc = prefix2ip4(tmp_str, val->data.string_val, &prefix);
+    if(sr_xpath_node_name_eq(val->xpath, "external-ip-pool")) {
+        rc = prefix2ip4(tmp_str, val->data.string_val, &prefix_len);
         if (0 != rc) {
             SRP_LOG_ERR_MSG("Error translate");
             return SR_ERR_INVAL_ARG;
         }
-
-        rc = sc_aton(tmp_str, address_range->payload.first_ip_address,
-                     VPP_IP4_ADDRESS_LEN);
-        if (0 != rc) {
-            SRP_LOG_ERR_MSG("Failed convert string IP address to int.");
-            return SR_ERR_INVAL_ARG;
-        }
-
-        if (prefix < VPP_IP4_HOST_PREFIX_LEN) {
-            // External IP pool is represented as IPv4 prefix in YANG module.
-            // VPP support range from first IPv4 address to last IPv4 address, not prefix.
-            // In this concept the broadcast IPv4 address of this IPv4 prefix,
-            // represent last IPv4 address for VPP
-            get_last_ip_address(
-                (sc_ipv4_addr*) &address_range->payload.last_ip_address[0],
-                (sc_ipv4_addr*) &address_range->payload.first_ip_address[0],
-                prefix);
-            address_range->last_ip_address_set = true;
+        address_range->first_ip = string(tmp_str);
+        if (prefix_len < VPP_IP4_HOST_PREFIX_LEN) {
+            get_network_broadcast_address(&address_range->last_ip, 
+                                          address_range->first_ip.c_str(),
+                                          prefix_len);
         }
     }
-
     return SR_ERR_OK;
 }
 
 // XPATH: /ietf-nat:nat/instances/instance[id='%s']/policy[id='%s']/external-ip-address-pool[pool-id='%s']/
-static int instances_instance_policy_external_ip_address_pool_cb(
+static int nat_policy_config_cb(
     sr_session_ctx_t *ds, const char *xpath, sr_notif_event_t event,
     void *private_ctx)
 {
     UNUSED(private_ctx);
-    sr_error_t rc = SR_ERR_OK;
-    sr_change_iter_t *it = NULL;
+    sr_change_iter_t *it;
     sr_change_oper_t oper;
-    sr_val_t *old_val = NULL;
-    sr_val_t *new_val = NULL;
+    sr_val_t *old_val, *new_val;
+    sr_xpath_ctx_t state = {0};
+    int rc = SR_ERR_OK;
+    address_range_t new_address_rng = {0};
+    address_range_t old_address_rng = {0};
+    string policy_id, pool_id;
     bool create = false;
-    bool delete = false;
-    struct address_range_t new_address_r = {0};
-    struct address_range_t old_address_r = {0};
+    bool del = false;
+    int curr_item_idx, item_idx = -1;
 
-    ARG_CHECK2(SR_ERR_INVAL_ARG, ds, xpath);
+   ARG_CHECK2(SR_ERR_INVAL_ARG, ds, xpath);
+
+    if (event == SR_EV_VERIFY)
+        return SR_ERR_OK;
 
     SRP_LOG_INF("In %s", __FUNCTION__);
 
-    new_address_r.payload.vrf_id = ~0;
-    old_address_r.payload.vrf_id = ~0;
-
-    SRP_LOG_DBG("'%s' modified, event=%d", xpath, event);
-
-    if (event != SR_EV_APPLY) {
-        return SR_ERR_OK;
-    }
-
-    if (sr_get_changes_iter(ds, (char *)xpath, &it) != SR_ERR_OK) {
-        // in example he calls even on fale
+    rc = sr_get_changes_iter(ds, (char *)xpath, &it);
+    if (rc != SR_ERR_OK) {
         sr_free_change_iter(it);
-        return SR_ERR_OK;
+        return rc;
     }
 
-    foreach_change (ds, it, oper, old_val, new_val) {
-
+    foreach_change(ds, it, oper, old_val, new_val) {
         SRP_LOG_DBG("A change detected in '%s', op=%d",
                     new_val ? new_val->xpath : old_val->xpath, oper);
 
-        switch (oper) {
-            case SR_OP_CREATED:
-                create = true;
-                rc = parse_instance_policy_external_ip_address_pool(new_val,
-                                                                &new_address_r);
-                break;
+        policy_id = sr_xpath_key_value(new_val ? new_val->xpath :
+                                                 old_val->xpath,
+                                "policy", "id", &state);
+        sr_xpath_recover(&state);
 
-            case SR_OP_MODIFIED:
-                delete = true;
-                rc = parse_instance_policy_external_ip_address_pool(old_val,
-                                                                &old_address_r);
-                if (SR_ERR_OK != rc) {
-                    break;
+        if (sr_xpath_node_name_eq(xpath, "external-ip-address-pool")) {
+            pool_id = sr_xpath_key_value(new_val ? new_val->xpath : old_val->xpath,
+                      "external-ip-address-pool", "pool-id", &state);
+
+            curr_item_idx = stoi(pool_id);
+            if (curr_item_idx != item_idx)
+            {
+                if (item_idx > -1) {
+                    if (del)
+                        rc = nat_external_ip_address_add_del(&old_address_rng, false);
+                    if (create)
+                        rc = nat_external_ip_address_add_del(&new_address_rng, true);
                 }
 
-                create = true;
-                rc = parse_instance_policy_external_ip_address_pool(new_val,
-                                                                &new_address_r);
-                break;
+                item_idx = curr_item_idx;
+                create = false;
+                del = false;
+                new_address_rng = { 0 };
+                old_address_rng = { 0 };
+            }
+        }                                
+        sr_xpath_recover(&state);
 
-            case SR_OP_MOVED:
-                break;
-
-            case SR_OP_DELETED:
-                delete = true;
-                rc = parse_instance_policy_external_ip_address_pool(old_val,
-                                                                &old_address_r);
-                break;
+        new_address_rng.vrf_id = ~0;
+        old_address_rng.vrf_id = ~0;
+        try {
+            switch (oper) {
+                case SR_OP_CREATED:
+                    create = true;
+                    parse_policy_entry(new_val, &new_address_rng);
+                    break;
+                case SR_OP_DELETED:
+                    del = true;
+                    parse_policy_entry(old_val, &old_address_rng);
+                    break;
+                default:
+                    SRP_LOG_WRN_MSG("Operation not supported");
+                    continue;
+                }
+        } catch (std::exception &exc) {
+            SRP_LOG_ERR("Error: %s", exc.what());
         }
-
         sr_free_val(old_val);
         sr_free_val(new_val);
-
-        if (SR_ERR_OK != rc) {
-            rc = SR_ERR_OPERATION_FAILED;
-            goto error;
-        }
     }
-
-    if (delete) {
-        old_address_r.payload.is_add = 0;
-        rc = set_address_range(&old_address_r);
-        if (SR_ERR_OK != rc) {
-            goto error;
-        }
-    }
-
-    if (create) {
-        new_address_r.payload.is_add = 1;
-        rc = set_address_range(&new_address_r);
-        if (SR_ERR_OK != rc) {
-            goto error;
-        }
-    }
+    if (del)
+        rc = nat_external_ip_address_add_del(&old_address_rng, false);
+    if (create)
+        rc = nat_external_ip_address_add_del(&new_address_rng, true);
 
 error:
     sr_free_change_iter(it);
     return rc;
 }
 
-enum mapping_type {
-    STATIC,
-    DYNAMIC_IMPLICIT,
-    DYNAMIC_EXPLICIT,
-    UNKNOWN,
-};
-
 /**
- * @brief Wrapper struct for VAPI static mapping payload.
+ * @brief Wrapper struct for VOM nat static mapping
  */
 struct static_mapping_t {
-    enum mapping_type mtype; //< Mapping type
-    bool local_ip_address_set; //< Variable are set in payload.
-    bool external_ip_address_set; //< Variable are set in payload.
-    bool protocol_set; //< Variable are set in payload.
-    bool local_port_set; //< Variable are set in payload.
-    bool external_port_set; //< Variable are set in payload.
-    bool external_sw_if_index_set; //< Variable are set in payload.
-    bool vrf_id_set; //< Variable are set in payload.
-    bool twice_nat_set; //< Variable are set in payload.
-    nat44_add_del_static_mapping_t payload; //< VAPI payload for static mapping
+    enum mapping_type mtype;
+    bool is_ipv6;
+    int protocol;
+    int local_port;
+    int external_port;
+    string local_ip;
+    string external_ip;
+    int instance_id;
+    int index;
 };
 
-// Check input structure, set VAPI payload and call VAPI function to set
-// nat44 static mapping.
-static sr_error_t set_static_mapping(struct static_mapping_t *mapping)
+inline string make_uuid(static_mapping_t *mapping) {
+    return MODULE_NAME + string("-") +
+            to_string(mapping->instance_id) + string("-") +
+            to_string(mapping->index);
+}
+
+int nat_static_mapping(static_mapping_t *mapping)
 {
-    int rc = 0;
-//     char tmp_ip1[VPP_IP4_ADDRESS_STRING_LEN];
-//     char tmp_ip2[VPP_IP4_ADDRESS_STRING_LEN];
+    if (!mapping->local_ip.empty() && !mapping->external_ip.empty()) {
+        if (STATIC == mapping->mtype) {
+            try {
+                const string uuid = make_uuid(mapping);
+                OM::mark_n_sweep ms(uuid);
 
-    ARG_CHECK(SR_ERR_INVAL_ARG, mapping);
+                boost::asio::ip::address in_addr = boost::asio::ip::address::from_string(mapping->local_ip);
+                boost::asio::ip::address out_addr = boost::asio::ip::address::from_string(mapping->external_ip);
 
-    if ((mapping->local_port_set != mapping->external_port_set) ||
-        !mapping->local_ip_address_set || !mapping->external_ip_address_set) {
-        SRP_LOG_ERR_MSG("NAT44 parameter missing.");
-
-        return SR_ERR_VALIDATION_FAILED;
-    }
-
-    if (!mapping->local_port_set && !mapping->external_port_set) {
-        //FIXME!!!!! Compile error
-//         mapping->payload.flags = NAT_IS_ADDR_ONLY;
-    } else {
-        //FIXME!!!!! Compile error
-//         mapping->payload.flags = NAT_IS_TWICE_NAT;
-        if (!mapping->protocol_set) {
-
-            SRP_LOG_ERR_MSG("NAT44 protocol missing.");
-            return SR_ERR_VALIDATION_FAILED;
+                nat_static ns(in_addr, out_addr);
+                OM::write(uuid, ns);
+                SRP_LOG_DBG("(OM::write(%s)) : add static mapping %s => %s", uuid.c_str(),
+                            in_addr.to_string().c_str(), 
+                            out_addr.to_string().c_str());
+            } catch (std::exception &exc) {
+                // catch boost exception from prefix_t
+                SRP_LOG_ERR("Error: %s", exc.what());
+                return SR_ERR_OPERATION_FAILED;
+            }
         }
     }
-
-    mapping->payload.external_sw_if_index = ~0;
-
-//     strncpy(tmp_ip1, sc_ntoa(mapping->payload.local_ip_address),
-//             VPP_IP4_ADDRESS_STRING_LEN);
-//     strncpy(tmp_ip2, sc_ntoa(mapping->payload.external_ip_address),
-//             VPP_IP4_ADDRESS_STRING_LEN);
-//     SRP_LOG_DBG("Local ip address: %s, external ip address: %s, addr_only: %u,"
-//                 " protocol: %u, local port: %u, external port: %u, twice_nat: %u,"
-//                 "is_add: %u", tmp_ip1, tmp_ip2, mapping->payload.addr_only,
-//                 mapping->payload.protocol, mapping->payload.local_port,
-//                 mapping->payload.external_port,  mapping->payload.twice_nat,
-//                 mapping->payload.is_add);
-
-    rc = nat44_add_del_static_mapping(&mapping->payload);
-    if (0 != rc) {
-        SRP_LOG_ERR_MSG("Failed set static mapping");
-        return SR_ERR_OPERATION_FAILED;
-    }
-
     return SR_ERR_OK;
 }
 
-// parse leaf from this xpath:
-// /ietf-nat:nat/instances/instance[id='%s']/mapping-table/mapping-entry[index='%s']/
-static int parse_instance_mapping_table_mapping_entry(
+// parse leafs of xpath: /ietf-nat:nat/instances/instance[id='%s']/mapping-table/mapping-entry[index='%s']/
+static int parse_mapping_entry(
     const sr_val_t *val,
-    struct static_mapping_t *mapping)
+    static_mapping_t *mapping)
 {
     int rc;
     char tmp_str[VPP_IP4_PREFIX_STRING_LEN] = {0};
@@ -324,166 +334,252 @@ static int parse_instance_mapping_table_mapping_entry(
                         val->type);
             return SR_ERR_INVAL_ARG;
         }
-
-        mapping->payload.protocol = val->data.uint8_val;
-        mapping->protocol_set = true;
+        mapping->protocol = val->data.uint8_val;
     } else if(sr_xpath_node_name_eq(val->xpath, "internal-src-address")) {
         if (SR_STRING_T != val->type) {
             SRP_LOG_ERR("Wrong internal-src-address, type, current type: %d.",
                         val->type);
             return SR_ERR_INVAL_ARG;
         }
-
         rc = prefix2ip4(tmp_str, val->data.string_val, NULL);
         if (0 != rc) {
             SRP_LOG_ERR_MSG("Error translate");
             return SR_ERR_INVAL_ARG;
         }
-
-        rc = sc_aton(tmp_str, mapping->payload.local_ip_address,
-                     VPP_IP4_ADDRESS_LEN);
-        if (0 != rc) {
-            SRP_LOG_ERR_MSG("Failed convert string IP address to int.");
-            return SR_ERR_INVAL_ARG;
-        }
-
-        mapping->local_ip_address_set = true;
+        mapping->local_ip = string(tmp_str);
     } else if(sr_xpath_node_name_eq(val->xpath, "external-src-address")) {
         if (SR_STRING_T != val->type) {
             SRP_LOG_ERR("Wrong external-src-address, type, current type: %d.",
                         val->type);
             return SR_ERR_INVAL_ARG;
         }
-
         rc = prefix2ip4(tmp_str, val->data.string_val, NULL);
         if (0 != rc) {
             SRP_LOG_ERR_MSG("Error translate");
             return SR_ERR_INVAL_ARG;
         }
-
-        rc = sc_aton(tmp_str, mapping->payload.external_ip_address,
-                     VPP_IP4_ADDRESS_LEN);
-        if (0 != rc) {
-            SRP_LOG_ERR_MSG("Failed convert string IP address to int.");
-            return SR_ERR_INVAL_ARG;
-        }
-
-        mapping->external_ip_address_set = true;
+        mapping->external_ip = string(tmp_str);
     } else if (sr_xpath_node(val->xpath, "internal-src-port", &state)) {
         sr_xpath_recover(&state);
         if(sr_xpath_node_name_eq(val->xpath, "start-port-number")) {
-            mapping->local_port_set = true;
-            mapping->payload.local_port = val->data.uint16_val;
+            mapping->local_port = val->data.uint16_val;
         }
     } else if (sr_xpath_node(val->xpath, "external-src-port", &state)) {
         sr_xpath_recover(&state);
         if(sr_xpath_node_name_eq(val->xpath, "start-port-number")) {
-            mapping->external_port_set = true;
-            mapping->payload.external_port = val->data.uint16_val;
+            mapping->external_port = val->data.uint16_val;
         }
     }
-
     return SR_ERR_OK;
 }
 
 // XPATH: /ietf-nat:nat/instances/instance[id='%s']/mapping-table/mapping-entry[index='%s']/
-static int instances_instance_mapping_table_mapping_entry_cb(
+static int nat_mapping_table_config_cb(
     sr_session_ctx_t *ds, const char *xpath, sr_notif_event_t event,
     void *private_ctx)
 {
     UNUSED(private_ctx);
-    sr_error_t rc = SR_ERR_OK;
-    sr_change_iter_t *it = NULL;
+    sr_change_iter_t *it;
     sr_change_oper_t oper;
-    sr_val_t *old_val = NULL;
-    sr_val_t *new_val = NULL;
+    sr_val_t *old_val, *new_val;
+    sr_xpath_ctx_t state = {0};
+    int rc = SR_ERR_OK;
+    static_mapping_t new_mapping = { STATIC, 0, };
+    string instance_id, mapping_table_index;
     bool create = false;
-    bool delete = false;
-    struct static_mapping_t new_mapping = {0};
-    struct static_mapping_t old_mapping = {0};
+    int curr_item_idx, item_idx = -1;
 
     ARG_CHECK2(SR_ERR_INVAL_ARG, ds, xpath);
 
+    if (event == SR_EV_VERIFY)
+        return SR_ERR_OK;
+
+    if (!sr_xpath_node_name_eq(xpath, "mapping-entry"))
+        return SR_ERR_OK;
+
     SRP_LOG_INF("In %s", __FUNCTION__);
 
-    new_mapping.mtype = UNKNOWN;
-    old_mapping.mtype = UNKNOWN;
-
-    SRP_LOG_DBG("'%s' modified, event=%d", xpath, event);
-
-    if (event != SR_EV_APPLY) {
-        return SR_ERR_OK;
-    }
-
-    if (sr_get_changes_iter(ds, (char *)xpath, &it) != SR_ERR_OK) {
-        // in example he calls even on fale
+    rc = sr_get_changes_iter(ds, (char *)xpath, &it);
+    if (rc != SR_ERR_OK) {
         sr_free_change_iter(it);
-        return SR_ERR_OK;
+        return rc;
     }
 
-    foreach_change (ds, it, oper, old_val, new_val) {
+    foreach_change(ds, it, oper, old_val, new_val) {
+        // TODO: connection-limits => continue
 
         SRP_LOG_DBG("A change detected in '%s', op=%d",
                     new_val ? new_val->xpath : old_val->xpath, oper);
+        instance_id = sr_xpath_key_value(new_val ? new_val->xpath :
+                                                   old_val->xpath,
+                                    "instance", "id", &state);
+        sr_xpath_recover(&state);
+        if (sr_xpath_node_name_eq(xpath, "mapping-entry")) {
+            mapping_table_index = sr_xpath_key_value(new_val ? new_val->xpath :
+                                                               old_val->xpath,
+                                    "mapping-entry", "index", &state);
 
-        switch (oper) {
-            case SR_OP_CREATED:
-                create = true;
-                rc = parse_instance_mapping_table_mapping_entry(new_val,
-                                                                &new_mapping);
-                break;
-
-            case SR_OP_MODIFIED:
-                delete = true;
-                rc = parse_instance_mapping_table_mapping_entry(old_val,
-                                                                &old_mapping);
-                if (SR_ERR_OK != rc) {
-                    break;
+            curr_item_idx = stoi(mapping_table_index);
+            if (curr_item_idx != item_idx)
+            {
+                if (item_idx > -1 && create) {
+                    new_mapping.instance_id = stoi(instance_id);
+                    new_mapping.index = item_idx;
+                    rc = nat_static_mapping(&new_mapping);
                 }
 
-                create = true;
-                rc = parse_instance_mapping_table_mapping_entry(new_val,
-                                                                &new_mapping);
-               break;
-
-            case SR_OP_MOVED:
-                break;
-
-            case SR_OP_DELETED:
-                delete = true;
-                rc = parse_instance_mapping_table_mapping_entry(old_val,
-                                                                &old_mapping);
-                break;
-        }
-
-        sr_free_val(old_val);
-        sr_free_val(new_val);
-
-        if (SR_ERR_OK != rc) {
-            rc = SR_ERR_OPERATION_FAILED;
-            goto error;
-        }
-    }
-
-    if (delete) {
-        old_mapping.payload.is_add = 0;
-        if (STATIC == old_mapping.mtype) {
-            rc = set_static_mapping(&old_mapping);
-            if (SR_ERR_OK != rc) {
-                goto error;
+                item_idx = curr_item_idx;
+                create = false;
+                new_mapping = { STATIC, 0, };
             }
         }
+        sr_xpath_recover(&state);
+
+        try {
+            switch (oper) {
+                case SR_OP_CREATED:
+                    create = true;
+                    parse_mapping_entry(new_val, &new_mapping);
+                    break;
+                case SR_OP_DELETED:
+                    break;
+                default:
+                    SRP_LOG_WRN_MSG("Operation not supported");
+                    break;
+                }
+        } catch (std::exception &exc) {
+            SRP_LOG_ERR("Error: %s", exc.what());
+        }
+        sr_free_val(old_val);
+        sr_free_val(new_val);
     }
 
     if (create) {
-        new_mapping.payload.is_add = 1;
-        if (STATIC == new_mapping.mtype) {
-            rc = set_static_mapping(&new_mapping);
-            if (SR_ERR_OK != rc) {
-                goto error;
+        new_mapping.instance_id = stoi(instance_id);
+        new_mapping.index = item_idx;
+        rc = nat_static_mapping(&new_mapping);    
+    }
+
+error:
+    sr_free_change_iter(it);
+    return rc;
+}
+
+static int
+nat44_interface_add_del(const string &if_name, 
+    const nat_interface_t &nat_interface, bool is_add)
+{
+    const string uuid = MODULE_NAME + if_name;
+    OM::mark_n_sweep ms(uuid);
+
+    try {
+        SRP_LOG_DBG("Inft '%s' nat44 inbound (%s), outbound(%s)",
+                    if_name.c_str(),
+                    nat_interface.inbound_nat44?"true":"false",
+                    nat_interface.outbound_nat44?"true":"false");
+
+        std::shared_ptr<interface> intf = nullptr;
+        if (!if_name.empty()) {
+            intf = interface::find(if_name);
+            if (nullptr == intf) {
+                SRP_LOG_ERR_MSG("Interfaces does not exist");
+                return SR_ERR_OPERATION_FAILED;
+            }
+        }
+
+        SRP_LOG_DBG("Inft handle : %s",intf->handle().to_string().c_str());
+        if (is_add) {
+            if (nat_interface.inbound_nat44) {
+                nat_binding nb_in(*intf, direction_t::INPUT, l3_proto_t::IPV4,
+                                  nat_binding::zone_t::INSIDE);
+                OM::write(uuid, nb_in);
+            }
+            if (nat_interface.outbound_nat44) {
+                nat_binding nb_out(*intf, direction_t::OUTPUT, l3_proto_t::IPV4,
+                                   nat_binding::zone_t::OUTSIDE);
+                OM::write(uuid, nb_out);
+            }
+        }
+    } catch (std::exception &exc) {
+        // catch boost exception from prefix_t
+        SRP_LOG_ERR("Error: %s", exc.what());
+        return SR_ERR_OPERATION_FAILED;
+    }
+    return SR_ERR_OK;
+}
+
+// XPATH: /ietf-interfaces/interfaces/interface[name='%s']/if-nat:nat
+static int nat_interface_config_cb(
+    sr_session_ctx_t *ds, const char *xpath, sr_notif_event_t event,
+    void *private_ctx)
+{
+    UNUSED(private_ctx);
+    sr_change_iter_t *it;
+    sr_change_oper_t oper;
+    sr_val_t *old_val, *new_val, *tmp;
+    sr_xpath_ctx_t state = {0};
+    int rc = SR_ERR_OK;
+    bool create = false;
+    bool del = false;
+    string if_name;
+    nat_interface_t nat_interface = {0};
+
+    ARG_CHECK2(SR_ERR_INVAL_ARG, ds, xpath);
+
+    if (event == SR_EV_VERIFY)
+        return SR_ERR_OK;
+
+    SRP_LOG_INF("In %s", __FUNCTION__);
+
+    rc = sr_get_changes_iter(ds, (char *)xpath, &it);
+    if (rc != SR_ERR_OK) {
+        sr_free_change_iter(it);
+        return rc;
+    }
+
+    foreach_change(ds, it, oper, old_val, new_val) {
+        switch (oper) {
+            case SR_OP_CREATED:
+                create = true;
+                tmp = new_val;
+                break;
+            case SR_OP_DELETED:
+                del = true;
+                tmp = old_val;
+                break;
+            default:
+                SRP_LOG_WRN_MSG("Operation not supported");
+                continue;
+        }
+
+        if_name = sr_xpath_key_value(tmp->xpath, "interface", "name", &state);
+        sr_xpath_recover(&state);
+
+        if (sr_xpath_node(tmp->xpath, "inbound", &state)) {
+            sr_xpath_recover(&state);
+            if (sr_xpath_node_name_eq(tmp->xpath, "nat44-support")) {
+                nat_interface.inbound_nat44 = tmp->data.bool_val;
+            } else if (sr_xpath_node_name_eq(tmp->xpath, "nat64-support")) {
+                nat_interface.inbound_nat64 = tmp->data.bool_val;
+            } else if (sr_xpath_node_name_eq(tmp->xpath, "nat66-support")) {
+                nat_interface.inbound_nat66 = tmp->data.bool_val;
+            }
+        } else if (sr_xpath_node(tmp->xpath, "outbound", &state)) {
+            sr_xpath_recover(&state);
+            if (sr_xpath_node_name_eq(tmp->xpath, "nat44-support")) {
+                nat_interface.outbound_nat44 = tmp->data.bool_val;
+            } else if (sr_xpath_node_name_eq(tmp->xpath, "nat64-support")) {
+                nat_interface.outbound_nat64 = tmp->data.bool_val;
+            } else if (sr_xpath_node_name_eq(tmp->xpath, "nat66-support")) {
+                nat_interface.outbound_nat66 = tmp->data.bool_val;
             }
         }
     }
+
+    if (del)
+        rc = nat44_interface_add_del(if_name, nat_interface, false);
+    if (create)
+        rc = nat44_interface_add_del(if_name, nat_interface, true);
 
 error:
     sr_free_change_iter(it);
@@ -497,13 +593,25 @@ ietf_nat_init(sc_plugin_main_t *pm)
     SRP_LOG_DBG_MSG("Initializing ietf-nat plugin.");
 
     rc = sr_subtree_change_subscribe(pm->session, "/ietf-nat:nat/instances/instance/policy/external-ip-address-pool",
-            instances_instance_policy_external_ip_address_pool_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+            nat_policy_config_cb, NULL, 90, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+    if (rc != SR_ERR_OK) {
+        goto error;
+    }
+
+    rc = sr_subtree_change_subscribe(pm->session, "/ietf-nat:nat/instances/instance/connection-limits",
+            nat_mapping_table_config_cb, NULL, 91, SR_SUBSCR_CTX_REUSE, &pm->subscription);
     if (rc != SR_ERR_OK) {
         goto error;
     }
 
     rc = sr_subtree_change_subscribe(pm->session, "/ietf-nat:nat/instances/instance/mapping-table/mapping-entry",
-            instances_instance_mapping_table_mapping_entry_cb, NULL, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+            nat_mapping_table_config_cb, NULL, 100, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+    if (rc != SR_ERR_OK) {
+        goto error;
+    }
+
+    rc = sr_subtree_change_subscribe(pm->session, "/ietf-interfaces:interfaces/interface/interface-nat:nat",
+            nat_interface_config_cb, NULL, 92, SR_SUBSCR_CTX_REUSE, &pm->subscription);
     if (rc != SR_ERR_OK) {
         goto error;
     }

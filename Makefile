@@ -47,49 +47,49 @@ endif
 #DEB#
 #####
 #Dependencies to build
-BUILD_DEB = curl build-essential autoconf automake ccache git cmake wget coreutils
+BUILD_DEB = curl build-essential autoconf automake ccache git cmake wget coreutils libboost-system-dev libboost-dev libboost-program-options-dev
 #Dependencies for netopeer2
 NETOPEER2_DEB = libssl-dev pkgconf
 #Dependencies for checkstyle
 CHECKSTYLE_DEB = indent
-#Dependencies for scvpp
-SCVPP_DEB = libcmocka-dev
 #Dependencies for sysrepo (swig required for sysrepo python, lua, java)
 SYSREPO_DEB = libev-dev libavl-dev bison flex libpcre3-dev libprotobuf-c-dev protobuf-c-compiler
 #Dependencies of libssh
 LIBSSH_DEB = zlib1g-dev
 #Sum dependencies
-DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SCVPP_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB}
+DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB}
 
 #Dependencies for automatic test
 DEB_TEST_DEPENDS = python3-pip python-pip libcurl4-openssl-dev libssh-dev \
 libxml2-dev libxslt1-dev libtool-bin
 
+#Dependencies for automatic test
+DEB_TEST_DEPENDS = python3-pip python-pip libcurl4-openssl-dev libpcre3-dev libssh-dev libxml2-dev libxslt1-dev libtool-bin
+
+#Dependencies for automatic test
+DEB_TEST_DEPENDS = python3-pip python-pip libcurl4-openssl-dev libpcre3-dev libssh-dev libxml2-dev libxslt1-dev libtool-bin
+
 #####
 #RPM#
 #####
 #Dependencies to build
-BUILD_RPM = curl autoconf automake ccache cmake3 wget gcc gcc-c++ git
+BUILD_RPM = curl autoconf automake ccache cmake3 wget gcc gcc-c++ git boost-system
 #Dependencies for netopeer2
 NETOPEER2_RPM = openssl-devel
 #Dependencies for checkstyle
 CHECKSTYLE_RPM = indent
-#Dependencies for scvpp
-SCVPP_RPM = libcmocka-devel
 #Dependencies for sysrepo
 SYSREPO_RPM = libev-devel bison flex pcre-devel protobuf-c-devel protobuf-c-compiler
 
-RPM_DEPENDS = ${BUILD_RPM} ${NETOPEER2_RPM} ${CHECKSTYLE_RPM} ${SCVPP_RPM} \
-	      ${SYSREPO_RPM}
+RPM_DEPENDS = ${BUILD_RPM} ${NETOPEER2_RPM} ${CHECKSTYLE_RPM} ${SYSREPO_RPM}
 
 #Dependencies for automatic test
 RPM_TEST_DEPENDS = python36-devel python36-pip python-pip libxml2-devel \
 libxslt-devel libtool which cmake3
 
-.PHONY: help install-dep install-dep-extra install-vpp install-models \
-        uninstall-models build-scvpp build-plugins build-package docker \
-        docker-test test clean distclean _clean_dl _libssh _libyang \
-        _libnetconf2 _sysrepo _netopeer2
+.PHONY: help install-dep install-dep-extra install-vpp install-models uninstall-models \
+    install-dep-gnmi-extra build-plugins build-gnmi build-package docker \
+    docker-test test clean distclean _clean_dl _libssh _libyang _libnetconf2 _sysrepo _netopeer2
 
 help:
 	@echo "Make Targets:"
@@ -98,9 +98,8 @@ help:
 	@echo " install-vpp            - install released vpp"
 	@echo " install-models         - install YANG models"
 	@echo " uninstall-models       - uninstall YANG models"
+	@echo " install-dep-gnmi-extra - install software extra dependencips from source code for gNMI"
 	@echo " install-test-extra     - install software extra dependencies from source code for YDK"
-	@echo " build-scvpp            - build scvpp"
-	@echo " test-scvpp             - unit test for scvpp"
 	@echo " build-plugins          - build plugins"
 	@echo " test-plugins           - integration test for sweetcomb plugins"
 	@echo " build-package          - build rpm or deb package"
@@ -168,7 +167,7 @@ _sysrepo:
 	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&wget https://github.com/sysrepo/sysrepo/archive/v0.7.7.tar.gz\
 	&&tar xvf v0.7.7.tar.gz && cd sysrepo-0.7.7 && mkdir -p build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
+	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALLj$(n_PREFIX:PATH=/usr \
 	-DGEN_LANGUAGE_BINDINGS=OFF -DGEN_CPP_BINDINGS=ON -DGEN_LUA_BINDINGS=OFF \
 	-DGEN_PYTHON_BINDINGS=OFF -DGEN_JAVA_BINDINGS=OFF -DBUILD_EXAMPLES=OFF \
 	-DENABLE_TESTS=OFF ..\
@@ -193,7 +192,44 @@ _netopeer2:
 	&&make -j$(nproc) && make install && sudo ldconfig\
 	&&cd ../../../ && mv v0.7-r1.tar.gz Netopeer2-0.7-r1.tar.gz\
 
-_test_python:
+_test_python_dep:
+ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
+	@sudo -E apt-get $(APT_ARGS) -y --force-yes install $(DEB_TEST_DEPENDS)\
+	&&pip3 install pexpect pyroute2 psutil
+ifeq ($(OS_VERSION_ID), 16.04)
+	# Need update libssh library, because with old library don't work ssh comunication with netopeer
+	@echo "deb http://archive.ubuntu.com/ubuntu/ bionic main restricted" >> /etc/apt/sources.list\
+	&&apt-get update && apt-get -y install libssh-4
+endif
+else ifeq ($(OS_ID),centos)
+	#TODO: Install centos dependencies
+# 	@sudo -E yum install -y $(RPM_GNMI_DEPENDS)
+else
+	$(error "This option currently works only on Ubuntu, Debian, Centos or openSUSE systems")
+endif
+
+_ydk:
+	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
+	&&wget https://github.com/CiscoDevNet/ydk-gen/archive/0.8.3.tar.gz\
+	&&tar xvf 0.8.3.tar.gz && cd ydk-gen-0.8.3 && pip install -r requirements.txt\
+	&&./generate.py --libydk -i && ./generate.py --python --core\
+	&&pip3 install gen-api/python/ydk/dist/ydk*.tar.gz\
+	&&./generate.py --python --bundle profiles/bundles/ietf_0_1_5.json\
+	&&./generate.py --python --bundle profiles/bundles/openconfig_0_1_5.json\
+	&&pip3 install gen-api/python/ietf-bundle/dist/ydk*.tar.gz\
+	&&pip3 install gen-api/python/openconfig-bundle/dist/ydk*.tar.gz\
+	&&cd ../\
+
+_clean_dl:
+	@rm -rf $(BR)/downloads
+
+install-dep-extra: _clean_dl _libssh _libyang _libnetconf2 _sysrepo _netopeer2
+	@cd ../ && rm -rf $(BR)/downloads
+
+#Protobuf must not be compiled with multiple core, it requires too much memory
+#gRPC can be compiled with cmake or autotools. autotools has been choosen
+#if cmake is choosen use SSL, ZLIB distribution package and compile protobuf separately
+install-dep-gnmi-extra:
 ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
 	@sudo -E apt-get $(APT_ARGS) -y --force-yes install $(DEB_TEST_DEPENDS)
 ifeq ($(OS_VERSION_ID), 16.04)
@@ -243,17 +279,8 @@ ifeq ($(OS_ID),centos)
 endif
 endif
 
-install-test-extra: _clean_dl _libssh _test_python _ydk
+install-test-extra: _test_python_dep _ydk
 	@cd ../ && rm -rf $(BR)/downloads
-
-build-scvpp:
-	@mkdir -p $(BR)/build-scvpp/; cd $(BR)/build-scvpp; \
-	cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX:PATH=/usr $(WS_ROOT)/src/scvpp/;\
-	make install
-	@# NEW INSTRUCTIONS TO BUILD-SCVPP MUST BE DECLARED ON A NEW LINE WITH '@'
-
-test-scvpp: build-scvpp
-	@cd $(BR)/build-scvpp; make test ARGS="-V"
 
 build-plugins:
 	@mkdir -p $(BR)/build-plugins/; cd $(BR)/build-plugins/; \
@@ -274,17 +301,22 @@ build-package:
 	@rm -rf $(BR)/build-package/_CPack_Packages;
 
 install-models:
+	@cd src/plugins/yang/opendaylight; \
+	sysrepoctl --install --yang=yang-ext@2013-07-09.yang > /dev/null;
 	@cd src/plugins/yang/ietf; \
 	sysrepoctl --install --yang=iana-if-type@2017-01-19.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-interfaces@2018-02-20.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-ip@2014-06-16.yang > /dev/null; \
 	sysrepoctl --install --yang=ietf-nat@2017-11-16.yang > /dev/null; \
 	sysrepoctl -e if-mib -m ietf-interfaces;
+	@cd src/plugins/yang/hc2vpp; \
+	sysrepoctl -S --install --yang=interface-nat@2017-08-16.yang > /dev/null;
 	@cd src/plugins/yang/openconfig; \
 	sysrepoctl -S --install --yang=openconfig-local-routing@2017-05-15.yang > /dev/null; \
 	sysrepoctl -S --install --yang=openconfig-interfaces@2018-08-07.yang > /dev/null; \
 	sysrepoctl -S --install --yang=openconfig-if-ip@2018-01-05.yang > /dev/null; \
-	sysrepoctl -S --install --yang=openconfig-acl@2018-11-21.yang > /dev/null;
+	sysrepoctl -S --install --yang=openconfig-acl@2018-11-21.yang > /dev/null; \
+	sysrepoctl -S --install --yang=openconfig-vlan-types@2018-02-14.yang > /dev/null;
 
 uninstall-models:
 	@ sysrepoctl -u -m ietf-ip > /dev/null; \
@@ -293,18 +325,18 @@ uninstall-models:
 	sysrepoctl -u -m openconfig-local-routing > /dev/null; \
 	sysrepoctl -u -m openconfig-if-aggregate > /dev/null; \
 	sysrepoctl -u -m openconfig-interfaces > /dev/null; \
+	sysrepoctl -u -m interface-nat > /dev/null; \
 	sysrepoctl -u -m ietf-nat > /dev/null; \
 	sysrepoctl -u -m iana-if-type > /dev/null; \
 	sysrepoctl -u -m ietf-interfaces > /dev/null; \
+	sysrepoctl -u -m yang-ext > /dev/null; \
 	sysrepoctl -u -m openconfig-vlan-types > /dev/null;
 
 clean:
-	@if [ -d $(BR)/build-scvpp ] ;   then cd $(BR)/build-scvpp   && make clean; fi
 	@if [ -d $(BR)/build-plugins ] ; then cd $(BR)/build-plugins && make clean; fi
 	@if [ -d $(BR)/build-package ] ; then cd $(BR)/build-package && make clean; fi
 
 distclean:
-	@rm -rf $(BR)/build-scvpp
 	@rm -rf $(BR)/build-plugins
 	@rm -rf $(BR)/build-package
 
