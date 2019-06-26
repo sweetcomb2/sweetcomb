@@ -32,9 +32,9 @@ extern "C" {
 
 /* BEGIN sysrepo utils */
 
-#define foreach_change(ds, it, oper, old, new) \
+#define foreach_change(ds, it, oper, old, newch) \
     while( (event != SR_EV_ABORT) && \
-            sr_get_change_next(ds, it, &oper, &old, &new) == SR_ERR_OK)
+            sr_get_change_next(ds, it, &oper, &old, &newch) == SR_ERR_OK)
 
 #define XPATH_SIZE 2000
 #define NOT_AVAL "NOT AVAILABLE"
