@@ -12,13 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+cmake_minimum_required(VERSION 3.0)
+project(sysrepo-vpp-plugins)
+
 # DEPENDENCIES
 ##############
+
+# Cmake find modules directory
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/../cmake")
 
 # check for required packages
 find_package(VPP) #use FindVPP.cmake
 find_package(PkgConfig) #official cmake module
 pkg_check_modules(SYSREPO REQUIRED libsysrepo) #PkgConfig cmake module maccro
+
+find_package(Boost 1.40 COMPONENTS program_options REQUIRED)
+include_directories(${Boost_INCLUDE_DIR})
 
 # get sysrepo plugins directory from pkgconfig
 if (NOT SR_PLUGINS_DIR)
@@ -38,11 +47,11 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 # set compiler and linker flags
-set(RIGOROUS_C_FLAGS "-Wlogical-op -Wformat=2")
-set(CMAKE_C_FLAGS "-Wall -Wextra -std=gnu99 ${RIGOROUS_C_FLAGS}")
-set(CMAKE_C_FLAGS_DEBUG "-Wall -Wextra -std=gnu99 -g -O0 ${RIGOROUS_C_FLAGS}")
+set(RIGOROUS_CXX_FLAGS "-Wlogical-op -Wformat=2")
+set(CMAKE_C_FLAGS "-Wall -Wextra -std=CMAKE_CXX_FLAGS ${RIGOROUS_C_FLAGS}")
+set(CMAKE_C_FLAGS_DEBUG "-Wall -Wextra -std=CMAKE_CXX_FLAGS_DEBUG -g -O0 ${RIGOROUS_C_FLAGS}")
 #NDEBUG to skip assert checks
-set(CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -std=gnu99 -DNDEBUG -O2 ${RIGOROUS_C_FLAGS}")
+set(CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -std=CMAKE_CXX_FLAGS_RELEASE -DNDEBUG -O2 ${RIGOROUS_C_FLAGS}")
 
 # add plugin include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -53,13 +62,15 @@ set(PLUGINS_SOURCES
     sc_plugins.c
 )
 
+set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
+
 # build the source code into shared library
-add_library(sweetcomb SHARED ${PLUGINS_SOURCES})
-target_link_libraries(sweetcomb ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
+add_library(vpp-plugins SHARED ${PLUGINS_SOURCES})
+target_link_libraries(vpp-plugins ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
                         ${VOM_LIBRARY})
 
 # INSTALL
 #########
 
 # install the plugin into plugins dir
-install(TARGETS sweetcomb DESTINATION ${SR_PLUGINS_DIR})
+install(TARGETS vpp-plugins DESTINATION ${SR_PLUGINS_DIR})
