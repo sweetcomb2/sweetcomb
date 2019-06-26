@@ -59,6 +59,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(PLUGINS_SOURCES
     sc_init.c
     sc_plugins.c
+    ietf/ietf_interface.cpp
 )
 
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
