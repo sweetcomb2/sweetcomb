@@ -13,7 +13,6 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.0)
-project(sysrepo-vpp-plugins)
 
 # DEPENDENCIES
 ##############
@@ -65,12 +64,12 @@ set(PLUGINS_SOURCES
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
 
 # build the source code into shared library
-add_library(vpp-plugins SHARED ${PLUGINS_SOURCES})
-target_link_libraries(vpp-plugins ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
-                        ${VOM_LIBRARY})
+add_library(sweetcomb SHARED ${PLUGINS_SOURCES})
+target_link_libraries(sweetcomb ${SYSREPO_LIBRARIES} ${Boost_LIBRARIES}
+                                  ${VOM_LIBRARY})
 
 # INSTALL
 #########
 
 # install the plugin into plugins dir
-install(TARGETS vpp-plugins DESTINATION ${SR_PLUGINS_DIR})
+install(TARGETS sweetcomb DESTINATION ${SR_PLUGINS_DIR})
