@@ -41,7 +41,7 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
                                  sr_notif_event_t event, void *private_ctx)
 {
     UNUSED(private_ctx);
-    char *if_name = nullptr;
+    std::string if_name;
     sr_change_iter_t *iter = nullptr;
     sr_change_oper_t op = SR_OP_CREATED;
     sr_val_t *old_val = nullptr;
@@ -72,11 +72,16 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
                     new_val ? new_val->xpath : old_val->xpath, op);
         if_name = sr_xpath_key_value(new_val ? new_val->xpath : old_val->xpath,
                                      "interface", "name", &xpath_ctx);
+        if (if_name.empty()) {
+            rc = SR_ERR_OPERATION_FAILED;
+            goto nothing_todo;
+        }
 
         intf = interface::find(if_name);
         if (nullptr == intf) {
             SRP_LOG_ERR_MSG("Interface does not exist");
-            return SR_ERR_INVAL_ARG;
+            rc = SR_ERR_INVAL_ARG;
+            goto nothing_todo;
         }
 
         switch (op) {
@@ -98,16 +103,25 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
         sr_free_val(old_val);
         sr_free_val(new_val);
 
-        /* Commit the changes to VOM DB and VPP */
-        if ( OM::write("enable/"+intf->key(), *intf) != rc_t::OK ) {
+        /* Commit the changes to VOM DB and VPP with interface name as key.
+         * Work for modifications too, because OM::write() check for existing
+         * l3 bindings. */
+        if ( OM::write(intf->key(), *intf) != rc_t::OK ) {
             SRP_LOG_ERR_MSG("Fail writing changes to VPP");
-            return SR_ERR_OPERATION_FAILED;
+            rc = SR_ERR_OPERATION_FAILED;
+            goto nothing_todo;
         }
 
     }
     sr_free_change_iter(iter);
 
     return SR_ERR_OK;
+
+nothing_todo:
+    sr_free_val(old_val);
+    sr_free_val(new_val);
+    sr_free_change_iter(iter);
+    return rc;
 }
 
 static int
@@ -126,7 +140,6 @@ ipv46_config_add_remove(const std::string &if_name,
     }
 
     try {
-
         VOM::route::prefix_t pfx(addr, prefix);
         l3 = std::make_shared<l3_binding>(*intf, pfx);
 
@@ -138,6 +151,7 @@ ipv46_config_add_remove(const std::string &if_name,
                 return SR_ERR_OPERATION_FAILED;
             }
         } else {
+            /* Remove l3 thanks to its unique identifier */
             OM::remove(KEY(l3));
         }
         #undef KEY
@@ -221,6 +235,10 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
 
         if_name = sr_xpath_key_value(new_val ? new_val->xpath : old_val->xpath,
                                      "interface", "name", &xpath_ctx);
+        if (if_name.empty()) {
+            rc = SR_ERR_OPERATION_FAILED;
+            goto nothing_todo;
+        }
         sr_xpath_recover(&xpath_ctx);
 
         try {
@@ -262,6 +280,12 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
     sr_free_change_iter(iter);
 
     return op_rc;
+
+nothing_todo:
+    sr_free_val(old_val);
+    sr_free_val(new_val);
+    sr_free_change_iter(iter);
+    return rc;
 }
 
 /**
@@ -379,28 +403,26 @@ interface_statistics_cb(const char *xpath, sr_val_t **values,
                         const char *original_xpath, void *private_ctx)
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
+    std::shared_ptr<interface> interface;
+    interface::stats_t stats;
+    std::string intf_name;
     sr_val_t *val = NULL;
     int vc = 8;
     int cnt = 0; //value counter
-    int rc = SR_ERR_OK;
     sr_xpath_ctx_t state = {0};
-    char *tmp;
-    char interface_name[VPP_INTFC_NAME_LEN] = {0};
-    std::shared_ptr<interface> interface;
-    interface::stats_t stats;
+    int rc = SR_ERR_OK;
 
     SRP_LOG_INF("In %s", __FUNCTION__);
 
     /* Retrieve the interface asked */
-    tmp = sr_xpath_key_value((char*) xpath, "interface", "name", &state);
-    if (!tmp) {
+    intf_name = sr_xpath_key_value((char*) xpath, "interface", "name", &state);
+    if (intf_name.empty()) {
         SRP_LOG_ERR_MSG("XPATH interface name not found");
         return SR_ERR_INVAL_ARG;
     }
-    strncpy(interface_name, tmp, VPP_INTFC_NAME_LEN);
     sr_xpath_recover(&state);
 
-    interface = interface::find(interface_name);
+    interface = interface::find(intf_name);
     if (interface == nullptr)
         goto nothing_todo;
 
