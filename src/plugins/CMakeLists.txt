@@ -60,6 +60,8 @@ set(PLUGINS_SOURCES
     sc_init.c
     sc_plugins.c
     sys_util.cpp
+    vpp-oper/interface.cpp
+    ietf/ietf_interface.cpp
 )
 
 set_source_files_properties(${PLUGINS_SOURCES} PROPERTIES LANGUAGE CXX)
