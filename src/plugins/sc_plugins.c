@@ -126,6 +126,13 @@ int sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     while (HW::connect() != true);
     SRP_LOG_INF_MSG("Connection to VPP established");
 
+    try {
+        OM::populate("boot");
+    } catch (...) {
+        SRP_LOG_ERR_MSG("fail populating VOM database");
+        exit(1);
+    }
+
     rc = sc_call_all_init_function(&sc_plugin_main);
     if (rc != SR_ERR_OK) {
         SRP_LOG_ERR("Call all init function error: %d", rc);

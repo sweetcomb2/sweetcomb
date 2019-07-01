@@ -13,6 +13,15 @@
  * limitations under the License.
  */
 
+/* This file implements:
+ *  - creation, configuration, deletion of an interface.
+ *  - adding, modifying, removing a prefix from an interface
+ *  - streaming of an interface statistics
+ *
+ * Even physical interfaces must be created before applying configuration to
+ * them. Else, it results in undefined behavior. (cf RFC 8343)
+ */
+
 #include <string>
 #include <exception>
 #include <memory>
@@ -26,34 +35,80 @@
 
 #include "sc_plugins.h"
 
+using namespace std;
+
 using VOM::interface;
 using VOM::OM;
 using VOM::HW;
 using VOM::l3_binding;
 using VOM::rc_t;
 
-/**
- * @brief Callback to be called by any config change of
- * "/ietf-interfaces:interfaces/interface/enabled" leaf.
- */
+using type_t = VOM::interface::type_t;
+using admin_state_t = VOM::interface::admin_state_t;
+
+class interface_builder {
+    public:
+        interface_builder() {}
+
+        shared_ptr<VOM::interface> build() {
+            if (m_name.empty() || m_type.empty())
+                return nullptr;
+            return make_shared<interface>(m_name, type_t::from_string(m_type),
+                                          admin_state_t::from_int(m_state));
+        }
+
+        /* Getters */
+        string name() {
+            return m_name;
+        }
+
+        /* Setters */
+        interface_builder& set_name(string n) {
+            m_name = n;
+        }
+
+        interface_builder& set_type(string t) {
+            if (t == "iana-if-type:ethernetCsmacd")
+                m_type = "ETHERNET";
+        }
+
+        interface_builder& set_state(bool enable) {
+            m_state = enable;
+        }
+
+        std::string to_string() {
+            std::ostringstream os;
+            os << m_name << "," << m_type << "," << m_state;
+            return os.str();
+        }
+
+    private:
+        string m_name;
+        string m_type;
+        bool m_state;
+};
+
+/* @brief creation of ethernet devices */
 static int
-ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
-                                 sr_notif_event_t event, void *private_ctx)
+ietf_interface_create_cb(sr_session_ctx_t *session, const char *xpath,
+                         sr_notif_event_t event, void *private_ctx)
 {
     UNUSED(private_ctx);
-    std::string if_name;
+    shared_ptr<VOM::interface> intf;
+    interface_builder builder;
+    string if_name;
     sr_change_iter_t *iter = nullptr;
-    sr_change_oper_t op = SR_OP_CREATED;
+    sr_xpath_ctx_t xpath_ctx = {0};
     sr_val_t *old_val = nullptr;
     sr_val_t *new_val = nullptr;
-    sr_xpath_ctx_t xpath_ctx = { 0, };
-    int rc = SR_ERR_OK, op_rc = SR_ERR_OK;
-    std::shared_ptr<interface> intf;
+    sr_change_oper_t op;
+    bool create, remove, modify;
+    int rc;
 
     SRP_LOG_INF("In %s", __FUNCTION__);
 
     /* no-op for apply, we only care about SR_EV_{ENABLED,VERIFY,ABORT} */
-    if (SR_EV_APPLY == event)
+    if (SR_EV_VERIFY != event)
         return SR_ERR_OK;
 
     SRP_LOG_DBG("'%s' modified, event=%d", xpath, event);
@@ -67,52 +122,74 @@ ietf_interface_enable_disable_cb(sr_session_ctx_t *session, const char *xpath,
     }
 
     foreach_change (session, iter, op, old_val, new_val) {
-
-        SRP_LOG_DBG("A change detected in '%s', op=%d",
-                    new_val ? new_val->xpath : old_val->xpath, op);
-        if_name = sr_xpath_key_value(new_val ? new_val->xpath : old_val->xpath,
-                                     "interface", "name", &xpath_ctx);
-        if (if_name.empty()) {
-            rc = SR_ERR_OPERATION_FAILED;
-            goto nothing_todo;
+        SRP_LOG_INF("Change xpath: %s",
+                    old_val ? old_val->xpath : new_val->xpath);
+        switch (op) {
+            case SR_OP_MODIFIED:
+                SRP_LOG_INF_MSG("Modified");
+                if (sr_xpath_node_name_eq(new_val->xpath, "enabled")) {
+                    string n = sr_xpath_key_value(new_val->xpath, "interface",
+                                                  "name", &xpath_ctx);
+                    intf = interface::find(n);
+                    if (!intf) {
+                        rc = SR_ERR_OPERATION_FAILED;
+                        goto nothing_todo;
+                    }
+                    intf->set(admin_state_t::from_int(new_val->data.bool_val));
+                    modify = true;
+                }
+                break;
+            case SR_OP_CREATED:
+                if (sr_xpath_node_name_eq(new_val->xpath, "name")) {
+                    builder.set_name(new_val->data.string_val);
+                    create = true;
+                } else if (sr_xpath_node_name_eq(new_val->xpath, "type")) {
+                    builder.set_type(new_val->data.string_val);
+                } else if (sr_xpath_node_name_eq(new_val->xpath, "enabled")) {
+                    builder.set_state(new_val->data.bool_val);
+                }
+                break;
+            case SR_OP_DELETED:
+                if (sr_xpath_node_name_eq(old_val->xpath, "name")) {
+                    builder.set_name(old_val->data.string_val);
+                    remove = true;
+                }
+                break;
+            default:
+                rc = SR_ERR_UNSUPPORTED;
+                goto nothing_todo;
         }
 
-        intf = interface::find(if_name);
+        sr_free_val(old_val);
+        sr_free_val(new_val);
+    }
+
+    if (create) {
+        SRP_LOG_INF("creating interface '%s'", builder.name().c_str());
+        intf = builder.build();
         if (nullptr == intf) {
             SRP_LOG_ERR_MSG("Interface does not exist");
             rc = SR_ERR_INVAL_ARG;
             goto nothing_todo;
         }
+    }
 
-        switch (op) {
-            case SR_OP_CREATED:
-            case SR_OP_MODIFIED:
-                if (new_val->data.bool_val)
-                    intf->set(interface::admin_state_t::UP);
-                else
-                    intf->set(interface::admin_state_t::DOWN);
-                break;
-            case SR_OP_DELETED:
-                intf->set(interface::admin_state_t::DOWN);
-                break;
-            default:
-                break;
-        }
-        sr_xpath_recover(&xpath_ctx);
-
-        sr_free_val(old_val);
-        sr_free_val(new_val);
-
+    if (create || modify) {
         /* Commit the changes to VOM DB and VPP with interface name as key.
          * Work for modifications too, because OM::write() check for existing
          * l3 bindings. */
         if ( OM::write(intf->key(), *intf) != rc_t::OK ) {
-            SRP_LOG_ERR_MSG("Fail writing changes to VPP");
+            SRP_LOG_ERR("Fail writing changes to VPP for: %s",
+                        builder.to_string().c_str());
             rc = SR_ERR_OPERATION_FAILED;
             goto nothing_todo;
         }
 
+    } else if (remove) {
+        SRP_LOG_INF("deleting interface '%s'", builder.name().c_str());
+        OM::remove(builder.name());
     }
+
     sr_free_change_iter(iter);
 
     return SR_ERR_OK;
@@ -124,13 +201,13 @@ nothing_todo:
     return rc;
 }
 
+
 static int
-ipv46_config_add_remove(const std::string &if_name,
-                        const std::string &addr, uint8_t prefix,
-                        bool add)
+ipv46_config_add_remove(const string &if_name, const string &addr,
+                        uint8_t prefix, bool add)
 {
-    std::shared_ptr<l3_binding> l3;
-    std::shared_ptr<interface> intf;
+    shared_ptr<l3_binding> l3;
+    shared_ptr<interface> intf;
     rc_t rc = rc_t::OK;
 
     intf = interface::find(if_name);
@@ -141,7 +218,7 @@ ipv46_config_add_remove(const std::string &if_name,
 
     try {
         VOM::route::prefix_t pfx(addr, prefix);
-        l3 = std::make_shared<l3_binding>(*intf, pfx);
+        l3 = make_shared<l3_binding>(*intf, pfx);
 
         #define KEY(l3) "l3_" + l3->itf().name() + "_" + l3->prefix().to_string()
         if (add) {
@@ -165,7 +242,7 @@ ipv46_config_add_remove(const std::string &if_name,
 }
 
 static void
-parse_interface_ipv46_address(sr_val_t *val, std::string &addr,
+parse_interface_ipv46_address(sr_val_t *val, string &addr,
                               uint8_t &prefix)
 {
     if (val == nullptr)
@@ -202,8 +279,8 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
     sr_val_t *old_val = nullptr;
     sr_val_t *new_val = nullptr;
     sr_xpath_ctx_t xpath_ctx = { 0, };
-    std::string new_addr, old_addr;
-    std::string if_name;
+    string new_addr, old_addr;
+    string if_name;
     uint8_t new_prefix = 0;
     uint8_t old_prefix = 0;
     int rc = SR_ERR_OK, op_rc = SR_ERR_OK;
@@ -289,21 +366,6 @@ nothing_todo:
 }
 
 /**
- * @brief Callback to be called by any config change under "/ietf-interfaces:interfaces-state/interface" path.
- * Does not provide any functionality, needed just to cover not supported config leaves.
- */
-static int
-ietf_interface_change_cb(sr_session_ctx_t *session, const char *xpath,
-                         sr_notif_event_t event, void *private_ctx)
-{
-    UNUSED(session); UNUSED(xpath); UNUSED(event); UNUSED(private_ctx);
-
-    SRP_LOG_INF("In %s", __FUNCTION__);
-
-    return SR_ERR_OK;
-}
-
-/**
  * @brief Callback to be called by any request for state data under "/ietf-interfaces:interfaces-state/interface" path.
  * Here we reply systematically with all interfaces, it the responsability of
  * sysrepo apply a filter not to answer undesired interfaces.
@@ -315,7 +377,7 @@ ietf_interface_state_cb(const char *xpath, sr_val_t **values,
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
     vapi_payload_sw_interface_details interface;
-    std::shared_ptr<interface_dump> dump;
+    shared_ptr<interface_dump> dump;
     sr_val_t *val = nullptr;
     int vc = 6; //number of answer per interfaces
     int cnt = 0; //value counter
@@ -327,7 +389,7 @@ ietf_interface_state_cb(const char *xpath, sr_val_t **values,
     if (!sr_xpath_node_name_eq(xpath, "interface"))
         goto nothing_todo; //no interface field specified
 
-    dump = std::make_shared<interface_dump>();
+    dump = make_shared<interface_dump>();
     HW::enqueue(dump);
     HW::write();
 
@@ -403,9 +465,9 @@ interface_statistics_cb(const char *xpath, sr_val_t **values,
                         const char *original_xpath, void *private_ctx)
 {
     UNUSED(request_id); UNUSED(original_xpath); UNUSED(private_ctx);
-    std::shared_ptr<interface> interface;
+    shared_ptr<interface> interface;
     interface::stats_t stats;
-    std::string intf_name;
+    string intf_name;
     sr_val_t *val = NULL;
     int vc = 8;
     int cnt = 0; //value counter
@@ -423,8 +485,10 @@ interface_statistics_cb(const char *xpath, sr_val_t **values,
     sr_xpath_recover(&state);
 
     interface = interface::find(intf_name);
-    if (interface == nullptr)
+    if (interface == nullptr) {
+        SRP_LOG_WRN("interface %s not found in VOM", intf_name.c_str());
         goto nothing_todo;
+    }
 
     /* allocate array of values to be returned */
     rc = sr_new_values(vc, &val);
@@ -500,13 +564,7 @@ ietf_interface_init(sc_plugin_main_t *pm)
     SRP_LOG_DBG_MSG("Initializing ietf-interface plugin.");
 
     rc = sr_subtree_change_subscribe(pm->session, "/ietf-interfaces:interfaces/interface",
-            ietf_interface_change_cb, nullptr, 0, SR_SUBSCR_CTX_REUSE, &pm->subscription);
-    if (SR_ERR_OK != rc) {
-        goto error;
-    }
-
-    rc = sr_subtree_change_subscribe(pm->session, "/ietf-interfaces:interfaces/interface/enabled",
-            ietf_interface_enable_disable_cb, nullptr, 100, SR_SUBSCR_CTX_REUSE, &pm->subscription);
+            ietf_interface_create_cb, nullptr, 100, SR_SUBSCR_CTX_REUSE, &pm->subscription);
     if (SR_ERR_OK != rc) {
         goto error;
     }
