@@ -8,9 +8,14 @@ class interface_dump : public VOM::dump_cmd<vapi::Sw_interface_dump>
 {
 public:
   /**
-   * Default Constructor
+   * Default Constructor - dump everything
    */
   interface_dump();
+
+  /*
+   * Constructor to dump one interface only
+   */
+  interface_dump(std::string interface_name);
 
   /**
    * Issue the command to VPP/HW
@@ -20,6 +25,9 @@ public:
    * convert to string format for debug purposes
    */
   std::string to_string() const;
+
+private:
+  std::string m_name; //interface name
 };
 
 #endif //__OPER_INTERFACE_H_
