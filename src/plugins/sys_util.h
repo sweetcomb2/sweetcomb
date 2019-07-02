@@ -106,6 +106,36 @@ get_xpath_key(char *dst, char *xpath, char *node, char *key, int length,
 
 namespace utils {
 
+/* Convert netmask to prefix length.
+ * 255.255.255.0->24
+ */
+inline uint8_t netmask_to_plen(boost::asio::ip::address netmask)
+{
+    in_addr_t n = 0;
+    uint8_t i = 0;
+    int af;
+    int rc;
+
+    if (netmask.is_v4())
+        af = AF_INET;
+    else if (netmask.is_v6())
+        af = AF_INET6;
+    else
+        throw std::runtime_error("Invalid address family");
+
+    /* Convert address to binary form */
+    rc = inet_pton(af, netmask.to_string().c_str(), &n);
+    if (rc <= 0)
+        throw std::runtime_error("Fail converting netmask to prefix length");
+
+    while (n > 0) {
+        n = n >> 1;
+        i++;
+    }
+
+    return i;
+}
+
 class prefix {
 public:
      /* Default Constructor */
