@@ -34,6 +34,7 @@
 #include <vpp-oper/interface.hpp>
 
 #include "sc_plugins.h"
+#include "sys_util.h"
 
 using namespace std;
 
@@ -257,7 +258,8 @@ parse_interface_ipv46_address(sr_val_t *val, string &addr,
         } else if (sr_xpath_node_name_eq(val->xpath, "prefix-length")) {
             prefix = val->data.uint8_val;
         } else if (sr_xpath_node_name_eq(val->xpath, "netmask")) {
-            prefix = netmask_to_prefix(val->data.string_val);
+            prefix = utils::netmask_to_plen(
+                    boost::asio::ip::address::from_string(val->data.string_val));
         }
     }
 }
@@ -294,8 +296,6 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
         return SR_ERR_OK;
 
     SRP_LOG_DBG("'%s' modified, event=%d", xpath, event);
-
-    sr_xpath_recover(&xpath_ctx);
 
     /* get changes iterator */
     rc = sr_get_changes_iter(session, xpath, &iter);
