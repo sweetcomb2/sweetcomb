@@ -39,22 +39,14 @@ using namespace std;
             sr_get_change_next(ds, it, &oper, &old, &newch) == SR_ERR_OK)
 
 #define XPATH_SIZE 2000
-#define NOT_AVAL "NOT AVAILABLE"
 
 #define VPP_IP4_HOST_PREFIX_LEN 32
-#define VPP_INTFC_NAME_LEN 64           /* Interface name max length */
 #define VPP_IP4_ADDRESS_LEN 4           /* IPv4 length in VPP format */
-#define VPP_IP6_ADDRESS_LEN 16          /* IPv6 length in VPP format */
-#define VPP_MAC_ADDRESS_LEN 8           /* MAC length in VPP format  */
 /* IPv4 and IPv6 length in string format */
 #define VPP_IP4_ADDRESS_STRING_LEN INET_ADDRSTRLEN //16, include '\0'
-#define VPP_IP6_ADDRESS_STRING_LEN INET6_ADDRSTRLEN //46, include '\0'
 #define VPP_IP4_PREFIX_STRING_LEN \
     INET_ADDRSTRLEN + sizeof('/') + 2 // include '\0'
-#define VPP_IP6_PREFIX_STRING_LEN \
-    INET6_ADDRSTRLEN + sizeof('/') + 3 // include '\0'
 
-/**********************************MACROS**********************************/
 #define ARG_CHECK(retval, arg) \
     do \
     { \
@@ -84,23 +76,6 @@ using namespace std;
  * This must be used only for callback function else suppress your unused
  * parameter in function prototype. */
 #define UNUSED(x) (void)x
-
-
-static inline int
-get_xpath_key(char *dst, char *xpath, char *node, char *key, int length,
-              sr_xpath_ctx_t *state) {
-    char *tmp;
-
-    tmp = sr_xpath_key_value(xpath, node, key, state);
-    if (!tmp) {
-        SRP_LOG_ERR("%s %s not found.", node, key);
-        return SR_ERR_INVAL_ARG;
-    }
-    strncpy(dst, tmp, length);
-    sr_xpath_recover(state);
-
-    return 0;
-}
 
 /* END of sysrepo utils */
 

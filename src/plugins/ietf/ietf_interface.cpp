@@ -119,7 +119,7 @@ ietf_interface_create_cb(sr_session_ctx_t *session, const char *xpath,
     if (SR_ERR_OK != rc) {
         sr_free_change_iter(iter);
         SRP_LOG_ERR("Unable to retrieve change iterator: %s", sr_strerror(rc));
-        return rc;
+        return SR_ERR_OPERATION_FAILED;
     }
 
     foreach_change (session, iter, op, old_val, new_val) {
