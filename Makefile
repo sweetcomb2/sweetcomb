@@ -56,8 +56,10 @@ CHECKSTYLE_DEB = indent
 SYSREPO_DEB = libev-dev libavl-dev bison flex libpcre3-dev libprotobuf-c-dev protobuf-c-compiler
 #Dependencies of libssh
 LIBSSH_DEB = zlib1g-dev
+#Dependencies of VOM
+LIBVOM_DEB = libboost-all-dev
 #Sum dependencies
-DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB}
+DEB_DEPENDS = ${BUILD_DEB} ${NETOPEER2_DEB} ${CHECKSTYLE_DEB} ${SYSREPO_DEB} ${LIBSSH_DEB} ${LIBVOM_DEB}
 
 #Dependencies for automatic test
 DEB_TEST_DEPENDS = python3-pip python-pip libcurl4-openssl-dev libssh-dev \
@@ -229,7 +231,7 @@ install-vpp:
 	@echo "please install vpp as vpp's guide from source if failed"
 ifeq ($(PKG),deb)
 #	@curl -s https://packagecloud.io/install/repositories/fdio/release/script.deb.sh | sudo bash
-	@sudo -E apt-get -y --force-yes install vpp libvppinfra* vpp-plugin-* vpp-dev
+	@sudo -E apt-get -y --force-yes install vpp libvppinfra* vpp-plugin-* vpp-dev vom
 else ifeq ($(PKG),rpm)
 #	@curl -s https://packagecloud.io/install/repositories/fdio/release/script.rpm.sh | sudo bash
 ifeq ($(OS_ID),centos)
@@ -283,7 +285,7 @@ distclean:
 	@rm -rf $(BR)/build-plugins
 	@rm -rf $(BR)/build-package
 
-docker:
+docker: distclean
 	@scripts/docker.sh
 
 docker-test:
