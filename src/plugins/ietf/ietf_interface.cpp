@@ -66,15 +66,18 @@ class interface_builder {
         /* Setters */
         interface_builder& set_name(string n) {
             m_name = n;
+            return *this;
         }
 
         interface_builder& set_type(string t) {
             if (t == "iana-if-type:ethernetCsmacd")
                 m_type = "ETHERNET";
+            return *this;
         }
 
         interface_builder& set_state(bool enable) {
             m_state = enable;
+            return *this;
         }
 
         std::string to_string() {
@@ -99,7 +102,7 @@ ietf_interface_create_cb(sr_session_ctx_t *session, const char *xpath,
     interface_builder builder;
     string if_name;
     sr_change_iter_t *iter = nullptr;
-    sr_xpath_ctx_t xpath_ctx = {0};
+    sr_xpath_ctx_t xpath_ctx;
     sr_val_t *old_val = nullptr;
     sr_val_t *new_val = nullptr;
     sr_change_oper_t op;
@@ -280,7 +283,7 @@ ietf_interface_ipv46_address_change_cb(sr_session_ctx_t *session,
     sr_change_oper_t op = SR_OP_CREATED;
     sr_val_t *old_val = nullptr;
     sr_val_t *new_val = nullptr;
-    sr_xpath_ctx_t xpath_ctx = { 0, };
+    sr_xpath_ctx_t xpath_ctx;
     string new_addr, old_addr;
     string if_name;
     uint8_t new_prefix = 0;
@@ -471,7 +474,7 @@ interface_statistics_cb(const char *xpath, sr_val_t **values,
     sr_val_t *val = NULL;
     int vc = 8;
     int cnt = 0; //value counter
-    sr_xpath_ctx_t state = {0};
+    sr_xpath_ctx_t state;
     int rc = SR_ERR_OK;
 
     SRP_LOG_INF("In %s", __FUNCTION__);

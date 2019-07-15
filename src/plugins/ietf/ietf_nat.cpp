@@ -111,15 +111,30 @@ public:
 
     /* Setters */
     nat_static_builder& set_type(std::string t)
-    {m_type = t;}
+    {
+        m_type = t;
+        return *this;
+    }
     nat_static_builder& set_internal_src(std::string p)
-    { m_internal_src = utils::prefix::make_prefix(p); }
+    {
+        m_internal_src = utils::prefix::make_prefix(p);
+        return *this;
+    }
     nat_static_builder& set_external_src(std::string p)
-    { m_external_src = utils::prefix::make_prefix(p); }
+    {
+        m_external_src = utils::prefix::make_prefix(p);
+        return *this;
+    }
     nat_static_builder& set_internal_dest(std::string p)
-    { m_internal_dest = utils::prefix::make_prefix(p); }
+    {
+        m_internal_dest = utils::prefix::make_prefix(p);
+        return *this;
+    }
     nat_static_builder& set_external_dest(std::string p)
-    { m_external_dest = utils::prefix::make_prefix(p); }
+    {
+        m_external_dest = utils::prefix::make_prefix(p);
+        return *this;
+    }
 
 private:
     std::string m_type;
@@ -143,7 +158,6 @@ nat_mapping_table_config_cb(sr_session_ctx_t *ds, const char *xpath,
     std::shared_ptr<VOM::nat_static> ns = nullptr;
     sr_val_t *ol = nullptr;
     sr_val_t *ne = nullptr;
-    sr_xpath_ctx_t state = {0};
     sr_change_iter_t *it;
     sr_change_oper_t oper;
     uint32_t xindex; // mapping entry index from xpath
@@ -208,8 +222,9 @@ nat_mapping_table_config_cb(sr_session_ctx_t *ds, const char *xpath,
     if (create) {
         ns = builder.build();
         if (ns == nullptr) {
-            SRP_LOG_ERR("Fail building nat %s %s", builder.inside().to_string(),
-                        builder.outside().to_string());
+            SRP_LOG_ERR("Fail building nat %s %s",
+                        builder.inside().to_string().c_str(),
+                        builder.outside().to_string().c_str());
             rc = SR_ERR_INVAL_ARG;
             goto error;
         }

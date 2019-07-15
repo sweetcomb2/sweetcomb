@@ -49,10 +49,9 @@ int get_vpp_pid()
     struct dirent *ptr = NULL;
     FILE *fp = NULL;
     char filepath[CMDLINE_MAX];
-    char filetext[strlen(VPP_FULL_PATH)];
+    char filetext[sizeof(VPP_FULL_PATH)+1];
     char *first = NULL;
     size_t cnt;
-    int rc;
 
     dir = opendir("/proc");
     if (dir == NULL)
@@ -74,7 +73,7 @@ int get_vpp_pid()
             continue;
 
         /* Write '/0' char in filetext array to prevent stack reading */
-        bzero(filetext, strlen(VPP_FULL_PATH));
+        bzero(filetext, sizeof(VPP_FULL_PATH));
 
         /* Read the string written in cmdline file */
         cnt = fread(filetext, sizeof(char), sizeof(VPP_FULL_PATH), fp);
@@ -165,6 +164,7 @@ void sr_plugin_cleanup_cb(sr_session_ctx_t *session, void *private_ctx)
 
 int sr_plugin_health_check_cb(sr_session_ctx_t *session, void *private_ctx)
 {
+    UNUSED(session); UNUSED(private_ctx);
     int vpp_pid_now = get_vpp_pid();
 
     if (vpp_pid_now == vpp_pid_start)

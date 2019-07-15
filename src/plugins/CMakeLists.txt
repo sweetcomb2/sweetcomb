@@ -47,10 +47,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 # set compiler and linker flags
 set(RIGOROUS_CXX_FLAGS "-Wlogical-op -Wformat=2")
-set(CMAKE_C_FLAGS "-Wall -Wextra -std=CMAKE_CXX_FLAGS ${RIGOROUS_C_FLAGS}")
-set(CMAKE_C_FLAGS_DEBUG "-Wall -Wextra -std=CMAKE_CXX_FLAGS_DEBUG -g -O0 ${RIGOROUS_C_FLAGS}")
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -std=gnu++11 ${RIGOROUS_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS_DEBUG "-Wall -Wextra -std=gnu++11 -g -O0 ${RIGOROUS_CXX_FLAGS}")
 #NDEBUG to skip assert checks
-set(CMAKE_C_FLAGS_RELEASE "-Wall -Wextra -std=CMAKE_CXX_FLAGS_RELEASE -DNDEBUG -O2 ${RIGOROUS_C_FLAGS}")
+set(CMAKE_CXX_FLAGS_RELEASE "-Wall -Wextra -std=gnu++11 -DNDEBUG -O2 ${RIGOROUS_CXX_FLAGS}")
 
 # add plugin include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

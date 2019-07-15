@@ -254,7 +254,7 @@ test-plugins: install-models
 build-package:
 	@mkdir -p $(BR)/build-package/; cd $(BR)/build-package/;\
 	$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
-	-DENABLE_TESTS=OFF $(WS_ROOT)/src/; make package;
+	$(WS_ROOT)/src/; make package;
 	@# NEW INSTRUCTIONS TO BUILD-PACKAGE MUST BE DECLARED ON A NEW LINE WITH
 	@# '@' NOT WITH ';' ELSE BUILD-PACKAGE WILL NOT RETURN THE CORRECT
 	@# RETURN CODE FOR JENKINS CI

@@ -51,15 +51,18 @@ class interface_builder {
         /* Setters */
         interface_builder& set_name(string n) {
             m_name = n;
+            return *this;
         }
 
         interface_builder& set_type(string t) {
             if (t == "iana-if-type:ethernetCsmacd")
                 m_type = "ETHERNET";
+            return *this;
         }
 
         interface_builder& set_state(bool enable) {
             m_state = enable;
+            return *this;
         }
 
         std::string to_string() {
@@ -85,7 +88,7 @@ oc_interfaces_config_cb(sr_session_ctx_t *ds, const char *xpath,
     shared_ptr<VOM::interface> intf;
     string intf_name;
     sr_change_iter_t *it = nullptr;
-    sr_xpath_ctx_t state = {0};
+    sr_xpath_ctx_t state;
     sr_val_t *ol = nullptr;
     sr_val_t *ne = nullptr;
     sr_change_oper_t oper;
@@ -145,6 +148,10 @@ oc_interfaces_config_cb(sr_session_ctx_t *ds, const char *xpath,
                     remove = true;
                 }
                 break;
+
+            default:
+                rc = SR_ERR_UNSUPPORTED;
+                goto nothing_todo;
         }
 
         sr_xpath_recover(&state);
@@ -196,7 +203,7 @@ oc_interfaces_state_cb(const char *xpath, sr_val_t **values, size_t *values_cnt,
     shared_ptr<interface_dump> dump;
     string intf_name;
     sr_val_t *vals = nullptr;
-    sr_xpath_ctx_t state = {0};
+    sr_xpath_ctx_t state;
     char xpath_root[XPATH_SIZE];
     int vc = 7;
     int cnt = 0;
