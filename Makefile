@@ -130,13 +130,13 @@ ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
 	mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&wget https://git.libssh.org/projects/libssh.git/snapshot/libssh-0.7.7.tar.gz\
 	&&tar xvf libssh-0.7.7.tar.gz && cd libssh-0.7.7 && mkdir build && cd build\
-	&&cmake -DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so -DZLIB_INCLUDE_DIR=/usr/include/ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
+	&&$(cmake) -DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so -DZLIB_INCLUDE_DIR=/usr/include/ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j$(nproc) &&sudo make install && sudo ldconfig&&cd ../../;
 else ifeq ($(OS_ID),centos)
 	mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&wget https://git.libssh.org/projects/libssh.git/snapshot/libssh-0.7.7.tar.gz\
 	&&tar xvf libssh-0.7.7.tar.gz && cd libssh-0.7.7 && mkdir build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j$(nproc) &&sudo make install && sudo ldconfig&&cd ../../;
 endif
 
@@ -144,7 +144,7 @@ _libyang:
 	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&wget https://github.com/CESNET/libyang/archive/v0.16-r3.tar.gz\
 	&&tar xvf v0.16-r3.tar.gz && cd libyang-0.16-r3 && mkdir -p build&& cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
 	-DGEN_LANGUAGE_BINDINGS=OFF -DGEN_CPP_BINDINGS=ON \
 	-DGEN_PYTHON_BINDINGS=OFF -DBUILD_EXAMPLES=OFF \
 	-DENABLE_BUILD_TESTS=OFF .. \
@@ -155,7 +155,7 @@ _libnetconf2:
 	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&git clone https://github.com/CESNET/libnetconf2.git&&cd libnetconf2\
 	&&git checkout 7e5f7b05f10cb32a546c42355481c7d87e0409b8&& mkdir -p build&& cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_BUILD_TESTS=OFF\
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DENABLE_BUILD_TESTS=OFF\
 	-DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j $(nproc) &&make install&&ldconfig\
 	&&cd ../../\
@@ -164,7 +164,7 @@ _sysrepo:
 	@mkdir -p $(BR)/downloads/&&cd $(BR)/downloads/\
 	&&wget https://github.com/sysrepo/sysrepo/archive/v0.7.7.tar.gz\
 	&&tar xvf v0.7.7.tar.gz && cd sysrepo-0.7.7 && mkdir -p build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr \
 	-DGEN_LANGUAGE_BINDINGS=OFF -DGEN_CPP_BINDINGS=ON -DGEN_LUA_BINDINGS=OFF \
 	-DGEN_PYTHON_BINDINGS=OFF -DGEN_JAVA_BINDINGS=OFF -DBUILD_EXAMPLES=OFF \
 	-DENABLE_TESTS=OFF ..\
@@ -176,16 +176,16 @@ _netopeer2:
 	&&tar xvf v0.7-r1.tar.gz\
 	&& echo "Netopeer2:keystored" \
 	&& cd Netopeer2-0.7-r1/keystored && mkdir -p build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j$(nproc) && make install && sudo ldconfig\
 	&& echo "Netopeer2:server" \
 	&&cd ../../server/ && mkdir -p build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_BUILD_TESTS=OFF\
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DENABLE_BUILD_TESTS=OFF\
 	-DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j$(nproc) && make install && ldconfig\
 	&& echo "Netopeer2:cli" \
 	&&cd ../../cli && mkdir -p build && cd build\
-	&&cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
+	&&$(cmake) -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr ..\
 	&&make -j$(nproc) && make install && sudo ldconfig\
 	&&cd ../../../ && mv v0.7-r1.tar.gz Netopeer2-0.7-r1.tar.gz\
 
@@ -244,7 +244,7 @@ install-test-extra: _clean_dl _libssh _test_python _ydk
 
 build-plugins:
 	@mkdir -p $(BR)/build-plugins/; cd $(BR)/build-plugins/; \
-	cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX:PATH=/usr $(WS_ROOT)/src/; \
+	$(cmake) -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX:PATH=/usr $(WS_ROOT)/src/; \
 	make install
 	@# NEW INSTRUCTIONS TO BUILD-PLUGINS MUST BE DECLARED ON A NEW LINE WITH '@'
 
